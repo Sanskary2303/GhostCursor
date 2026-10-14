@@ -74,16 +74,16 @@ Programmatic events remain untrusted (`isTrusted=false`). They do not create gen
 - The SDK is TypeScript/JavaScript with no React/Next/Redux runtime dependency.
 - It can be used by React, Next.js, Vue, Angular, or plain JavaScript applications.
 - Importing it during SSR must not access window/document immediately.
-- The hosted service is Node.js/TypeScript. Do not move orchestration into the demo or confuse the Django customer adapter with the hosted service.
-- Provide **Node.js and Python/Django customer adapters now**.
-- Other customer backends can implement the documented HTTP/JSON protocol directly. Dedicated adapters for Java, .NET, Go, etc. are conveniences, not mandatory for interoperability. Do not build every possible language adapter initially.
+- The hosted service is Python 3.12 (FastAPI + Google Agent Development Kit Engine).
+- Provide Python (FastAPI/Flask/Django) and Node.js customer backend SDK adapters.
+- Other customer backends can implement the documented HTTP/JSON protocol directly. Dedicated adapters for Java, .NET, Go, etc. are conveniences, not mandatory for interoperability.
 
 ### 2.5 Client-owned Brain is a core differentiator
 
 Cross-page and business awareness is central to the product, not optional chat decoration. Separate three sources of knowledge:
 
 1. **Application map/capabilities:** pages, logical targets, actions, dependencies, readiness requirements, and multi-page workflows.
-2. **Private Brain:** Markdown business explanations, domain constraints, approved mappings, workflow guidance, and clarification rules maintained by the client.
+2. **Private Brain:** Markdown business explanations, domain constraints, approved mappings, workflow guidance, and clarification rules maintained by the client (strictly zero HTML tags or DOM selectors; dynamic route resolution via `platform.md` + `pages/{page}.md`).
 3. **Live context:** current page and opted-in control values/availability supplied by the frontend integration.
 
 Neither DOM scanning nor data attributes alone provides business understanding or knowledge of unmounted pages.
@@ -94,25 +94,29 @@ Default to explicit registration and approval. Business APIs still enforce norma
 
 Build production-oriented boundaries but do not equate a working demo with a production-certified service. Track concrete missing work, unavailable validation, and external prerequisites. Never fabricate test results or deployment success.
 
+### 2.7 Customer Data Sovereignty (Stateless Cloud Engine)
+
+Ghost Cursor Cloud is a stateless reasoning engine and does not persist conversational chats or personal customer records. Chat session records, message histories, and execution audits are persisted exclusively in the customer's own database using SDK-provided schemas (`ghost_chat_sessions`, `ghost_chat_messages`) and the `SQLAlchemyChatStore` abstraction. Ephemeral multi-turn run state (TTL: 30 minutes) on Cloud Run / Cloud SQL (PostgreSQL 17) or Firestore handles event deduplication, optimistic concurrency, and revision locking.
+
+### 2.8 Customer Backend Read-Only Tools via Gateway Loopback
+
+Domain-specific backend knowledge tools (e.g., `lookup_order`, `check_warehouse_stock`, `simulate_discount_roi`) are registered directly in the customer's backend gateway via the Backend SDK and executed locally via the Gateway Loopback (Reverse-Dispatch) protocol. When the Google ADK Agent emits a tool call, the orchestrator requests local execution from the customer gateway signed with HMAC-SHA256 (`X-Ghost-Signature`) and authorized with the user's authentic session (`X-Ghost-Subject`). Tools are strictly read-only and bounded to 16,000 characters.
+
 ## 3. Technology and repository layout
 
-Use an npm-workspaces TypeScript monorepo and a separate installable Python distribution. Do not introduce unnecessary Kubernetes or a large agent framework.
+Use an npm-workspaces TypeScript monorepo for client packages and a Python distribution for backend services. Deploy the orchestrator as a single Cloud Run container (Modular Monolith) rather than Kubernetes or microservices.
 
 Baseline technology choices:
 
-- Node 22.16+; prefer a currently patched supported LTS for deployment.
-- TypeScript strict mode, ESM, ES2022, NodeNext resolution for Node packages.
-- Fastify 5 for the hosted HTTP service.
-- Zod 3 for canonical runtime contracts; Ajv 8 for customer tool argument schemas.
-- PostgreSQL 17 using `pg`; PostgreSQL is authoritative run storage.
-- tsup for ESM/declaration package builds; tsx for development/test execution.
-- Next.js App Router, React 19 and TypeScript for the independent demo.
-- Python 3.11+, Django 5.2-compatible adapter, httpx, jsonschema.
-- python-dotenv only as an optional demo convenience.
-- Node test runner and Playwright for service/browser verification; unittest for Python. Other test libraries are acceptable if equivalent tests and commands work.
-- Docker/Compose locally; GCP Cloud Run/Cloud SQL/Secret Manager in deployment.
-
-These are compatibility families, not instructions to install vulnerable versions. Resolve supported patched releases, commit a lockfile, audit the full tree, and document justified overrides. Do not use unverified future model or package IDs.
+- Python 3.12 with FastAPI for the hosted orchestrator (`services/orchestrator`).
+- Google Agent Development Kit (ADK) with Gemini 2.0 Flash / Pro via Vertex AI.
+- TypeScript strict mode, ESM, Vite + Rollup for Frontend SDK (`packages/sdk-frontend`).
+- Shadow DOM sandboxing for Chat Widget & Tour Overlay; Cursor Canvas directly on Host DOM.
+- Element Targeting Cascade (`data-ghost-id` → `data-testid` → `id` → ARIA labels → visible text).
+- Python Backend SDK (`packages/sdk-server-python`) with FastAPI, Flask, Django support and `SQLAlchemyChatStore`.
+- React 18 + Vite + TailwindCSS for the independent demonstration website (**ShopHive** in `demo/shophive`).
+- Ephemeral run storage on Cloud Run / Cloud SQL (PostgreSQL 17) or Firestore with 30-minute TTL; Customer database (PostgreSQL / SQLite) for chat history.
+- Docker/Compose locally; GCP Cloud Run, Secret Manager, Cloud Logging, Cloud Monitoring in deployment.
 
 Required structure and responsibilities:
 
@@ -126,72 +130,49 @@ ghost-cursor/
   tsconfig.json
   .gitignore
   .dockerignore
-  compose.yaml
-  Dockerfile
-  cloudbuild.yaml
-  playwright.config.ts
   packages/
-    protocol/
-      package.json
-      src/index.ts
-    sdk/
+    sdk-frontend/                  # @ghost-cursor/sdk & React wrapper (TS/Preact/Shadow DOM)
       package.json
       src/index.ts
       src/interactions.ts
-    gateway-node/
-      package.json
-      src/index.ts
-  adapters/
-    django/
+      src/core/
+      src/react/
+    sdk-server-python/             # ghost-cursor (Python Backend SDK)
       pyproject.toml
-      src/ghost_cursor_django/
+      ghost_cursor/
         __init__.py
-        views.py
-        schemas.json
-      tests/
+        brain_loader.py
+        storage.py
+        proxy.py
+        fastapi.py
   services/
-    orchestrator/
-      package.json
-      .env.example
-      src/app.ts
-      src/store.ts
-      src/providers.ts
-      src/main.ts
-  apps/
-    demo-next/
-      package.json
-      next.config.mjs
-      tsconfig.json
+    orchestrator/                  # Ghost Cursor Cloud Backend (Python 3.12 / FastAPI + Google ADK)
+      Dockerfile
+      requirements.txt
       app/
-        layout.tsx
-        page.tsx
-        style.css
-        budget-provider.tsx
-        ghost-integration.tsx
-        assumptions/page.tsx
-        login/page.tsx
-        api/ghost/route.ts
-        api/login/route.ts
-      lib/auth.ts
-      lib/gateway.ts
-      private/brain/budget.md
-  examples/
-    django-demo/
-      manage.py
-      settings.py
-      urls.py
-      private/budget.md
-    dev/shim/server.py
-  scripts/
-    setup-local.mjs
-    export-schemas.ts
-    provider-smoke.ts
-  tests/
-    service.test.ts
-    providers.test.ts
-    browser-api.ts
-    browser/demo.spec.ts
-  infra/main.tf
+        main.py
+        agent.py
+        brain_loader.py
+        tools/
+        llm/
+        storage/
+  demo/
+    shophive/                      # Independent Showcase Customer App (ShopHive)
+      frontend/                    # React 18 + Vite + TailwindCSS
+        package.json
+        src/
+          App.tsx
+          pages/
+      backend/                     # FastAPI customer backend
+        requirements.txt
+        main.py
+        tools/ghost_tools.py
+        brain/
+          platform.md
+          pages/
+        migrations/
+          001_ghost_chat_schema.sql
+  infra/
   docs/
     INTEGRATION.md
     PROVIDERS.md
@@ -199,9 +180,9 @@ ghost-cursor/
     OPERATIONS.md
 ```
 
-You may split large modules further, but preserve these boundaries. The demo must be a consumer of the built packages rather than importing hidden orchestrator implementation code into its UI.
+You may split large modules further, but preserve these boundaries. The demo must be an authentic customer application integrating the SDK rather than importing internal orchestrator implementation code into its UI.
 
-Use package names `@ghost-cursor/protocol`, `@ghost-cursor/sdk`, `@ghost-cursor/gateway-node`, `@ghost-cursor/orchestrator`, and `@ghost-cursor/demo`, initially version `0.1.0`. Hosted service and demo are private workspace packages. Protocol, SDK, and gateway expose ESM plus type declarations from dist and have sensible files/exports fields. Python distribution name is `ghost-cursor-django` with import name `ghost_cursor_django`.
+Use package names `@ghost-cursor/sdk`, `@ghost-cursor/sdk-react`, and Python distribution `ghost-cursor`. Hosted orchestrator and demo are separate services deployed on Cloud Run.
 
 Preserve supplied licensing and assets. The reference project uses MIT with Copyright (c) 2026; retain that notice when recreating that project under its license. Do not falsely attribute unrelated new work or claim that unprovided artwork has been reproduced. Functional acceptance must not depend on access to original binary artwork.
 
@@ -221,82 +202,56 @@ Use a versioned, strict runtime protocol. Reject unknown properties at security 
 
 ```json
 {
-  "page": "assumptions",
-  "values": { "budget.hours": "700", "budget.rate": "120" },
-  "availableTargets": ["budget.hours", "budget.rate", "nav.summary"]
+  "page": "products",
+  "values": { "product.selected_size": "10", "product.price": "129.99" },
+  "availableTargets": ["product.size.9", "product.size.10", "product.add_to_cart_btn", "nav.cart"]
 }
 ```
 
 `values` is a record of scalars, default empty. `availableTargets` defaults empty and has at most 100 IDs. It is an observation, not a grant of permission.
 
-### 4.3 Server capability
+### 4.3 Element Targeting Cascade & Target Verification
+
+Target elements are resolved exclusively via the deterministic **Element Targeting Cascade**:
+1. Level 1: Explicit Logical ID (`data-ghost-id="product.add_to_cart_btn"`)
+2. Level 2: Automated Test ID (`data-testid="add-to-cart"`)
+3. Level 3: Standard DOM ID (`id="add-to-cart-button"`)
+4. Level 4: ARIA Accessibility Labels (`aria-label`, `role="button"`)
+5. Level 5: Semantic Text & Visible Value Matching ("Add to Cart")
+
+The model never writes custom code or raw DOM scripts. It receives fixed, typed tool definitions and emits tool call JSON with registered `target_id` parameters.
+
+### 4.4 Fixed Frontend Action Tools
+
+The Google ADK Agent is equipped with fixed Frontend Action Tools:
+- `navigate(target_page: str, explanation: str)`: SPA route transition.
+- `click(target_id: str, explanation: str)`: click button/link/tab.
+- `fill_input(target_id: str, value: str|num, explanation: str)`: native setter dispatch.
+- `toggle_switch(target_id: str, state: bool, explanation: str)`: switch/checkbox toggle.
+- `guided_tour(steps: list[dict])`: spotlight walkthrough sequence.
+- `ask_clarification(question: str, options: list[str])`: prompt user when ambiguous.
+
+Approval Policy: Mutating or multi-step action sequences require explicit user confirmation ("Approve and Run") prior to execution.
+
+### 4.5 Questions, Tools and Model Plan
+
+Question: `{ question, options }`, question 1-1,000 characters, options at most ten strings of at most 200 characters.
+
+Customer Backend Read-Only Tools: registered on customer backend (e.g. `lookup_order`, `check_warehouse_stock`, `simulate_discount_roi`), executed via Gateway Loopback under authentic user session context (`X-Ghost-Subject`).
+
+Model Plan / Tool Calls:
 
 ```json
 {
-  "target": "budget.hours",
-  "description": "Edit engineering hours",
-  "operations": ["setValue"],
-  "page": "assumptions",
-  "requiresApproval": true
+  "tool": "click",
+  "parameters": {
+    "target_id": "product.add_to_cart_btn",
+    "explanation": "Add the selected size 10 sneakers to the cart."
+  }
 }
 ```
 
-Description is at most 500 characters. Operations are selected from the five supported operations below. Approval defaults true. Use `page: "global"` for navigation available across pages. At most 100 capabilities; reject duplicate target declarations.
-
-### 4.4 Actions
-
-Supported operations are exactly:
-
-- `setValue`: registered text/number/native input or textarea.
-- `select`: registered single native select.
-- `setChecked`: registered checkbox/radio.
-- `click`: registered button/link.
-- `highlight`: registered visual target.
-
-```json
-{
-  "id": "set-hours",
-  "target": "budget.hours",
-  "operation": "setValue",
-  "value": 500,
-  "explanation": "Apply the reviewed engineering-hours assumption."
-}
-```
-
-`id` and `target` are logical IDs. Explanation is at most 500 characters and defaults empty. `setValue`/`select` require a string or finite number; `setChecked` requires a boolean; `click`/`highlight` must not carry a value. Validate target and operation against gateway-authorized capabilities.
-
-The model does not choose its own approval policy. Public actions add a server-derived `requiresApproval` field. The baseline SDK still asks for approval for every batch, including navigation/highlight batches.
-
-### 4.5 Questions, tools and model plan
-
-Question: `{ id, text, options }`, text 1-1,000 characters, options default empty, at most ten strings of at most 200 characters.
-
-Tool definition: `{ name, description, inputSchema }`, description at most 1,000 characters; inputSchema is a validated JSON Schema object. At most 20 definitions; reject duplicate names and invalid schemas.
-
-Tool call: `{ id, name, arguments }`, arguments a JSON object. The name must match an approved definition and arguments must satisfy its schema.
-
-Model plan:
-
-```json
-{
-  "reply": "I will calculate a scenario before changing anything.",
-  "questions": [],
-  "actions": [],
-  "toolCalls": [
-    {
-      "id": "forecast-1",
-      "name": "forecast",
-      "arguments": {
-        "engineeringHours": 500,
-        "hourlyRate": 100,
-        "qaBudget": 20000
-      }
-    }
-  ]
-}
-```
-
-Reply is at most 6,000 characters. Limits: five questions, twelve actions, four tool calls. Missing arrays may normalize to empty internally, but transmitted responses should have explicit arrays. Only ONE of questions/actions/toolCalls may be nonempty in a turn. All operation/question IDs in that plan must be unique. Reply with all arrays empty means completion. Never execute partial parsed output.
+Discrete Plan Rules: Within any single model turn, only ONE of `questions`, `actions`, or `toolCalls` may be non-empty. An empty array across all three indicates terminal plan completion. Never execute partial parsed output.
 
 ### 4.6 Hosted API: create run
 
@@ -308,8 +263,8 @@ Body:
 {
   "protocolVersion": "1",
   "requestId": "a valid UUID",
-  "message": "Bring Phoenix within budget without reducing QA.",
-  "context": { "page": "summary", "values": {}, "availableTargets": [] },
+  "message": "Add the Air Max 90 in size 10 to my cart.",
+  "context": { "page": "products", "values": {}, "availableTargets": ["product.size.10", "product.add_to_cart_btn"] },
   "brain": "Authorized private Markdown excerpts, server-to-server only",
   "capabilities": [],
   "tools": []
@@ -581,217 +536,90 @@ Do NOT indiscriminately fire every keyboard/pointer/input/change/blur event. Doi
 
 Demonstrate execution across SPA page changes with persistent mounting and destination readiness. The baseline need not automatically resume after a hard reload. Do not blindly replay a persisted queue after reload/disconnect: the last operation may already have happened. Track durable receipts/reconciliation as separate production work. Task revision is not application-state concurrency protection; customer postconditions must guard changing business state.
 
-## 9. Demonstration website: Phoenix project-budget planner
+## 9. Demonstration website: ShopHive Footwear & Apparel Store
 
-Do not build an Amazon/Netflix clone. A fictional budget planner naturally demonstrates cross-page knowledge, calculations, controlled fields, approvals, constraints and explanations without real purchases or copyrighted branding.
+To showcase Ghost Cursor's complete feature set in an authentic domain, implement **ShopHive** — a production-grade demo e-commerce storefront for sneakers and sportswear.
 
-Build an independent Next.js application in `apps/demo-next` with:
+Build an independent customer application in `demo/shophive` with:
 
-- `/`: project summary.
-- `/assumptions`: editable assumptions.
-- `/login`: explicit local demo login.
-- Persistent layout/provider holding ordinary React application state.
-- Separate `ghost-integration.tsx` containing SDK target registrations.
-- Server-only Node gateway configuration and private Brain.
+- Frontend (`demo/shophive/frontend`): React 18 + Vite + TailwindCSS.
+  - `/`: Product catalog grid.
+  - `/product/:id`: Single product detail page (interactive size selection, stock checks, add-to-cart).
+  - `/cart`: Shopping cart with totals and promo code input.
+  - `/checkout`: Multi-step checkout form (shipping address, payment options).
+  - `/orders`: Order history and timeline tracking.
+  - `/settings`: User preferences and theme toggle.
+  - Mounted `<GhostCursor apiEndpoint="/api/ghost-cursor" />` widget rendered in the bottom right corner.
+- Backend (`demo/shophive/backend`): FastAPI customer gateway.
+  - Hosts customer user session and proxies requests to Ghost Cursor Cloud.
+  - Attaches `SQLAlchemyChatStore` to manage customer-owned chat sessions and messages.
+  - Registers read-only backend tools (`lookup_order`, `check_warehouse_stock`, `simulate_discount_roi`).
+  - Serves dynamic Brain files from `brain/platform.md` and `brain/pages/*.md`.
 
-### 9.1 Exact business fixture
+### 9.1 Exact Showcase Scenarios & Verification Fixtures
 
-Project: **Phoenix platform modernization**.
+1. **Screen-Aware Guidance:**
+   - User on Product Detail Page asks: *"What sizes are available?"*
+   - Ghost Cursor inspects the live DOM context and active warehouse stock, responding with available sizes and price.
+2. **AI Cursor Auto-Actions:**
+   - User asks: *"Add the Air Max 90 in size 10 to my cart"*
+   - Ghost Cursor plans: `navigate(target_page="products/air-max-90")` → `click(target_id="product.size.10")` → `click(target_id="product.add_to_cart_btn")`.
+   - AI Cursor animates across the viewport and updates React cart state.
+3. **Customer Backend Read-Only Tools (Gateway Loopback):**
+   - User asks: *"Where is order SH-1024?"*
+   - Google ADK agent calls `lookup_order(order_id="SH-1024")`. Customer gateway executes tool locally under `X-Ghost-Subject` and returns tracking status.
+4. **Smart Clarifying Questions:**
+   - User says: *"I want to checkout"*
+   - Ghost Cursor asks: *"Which shipping address should I use: 123 Main St (saved) or enter a new address?"*
+5. **Guided Tours:**
+   - User asks: *"How do I track my return?"*
+   - Multi-step spotlight overlay highlights the orders tab and carrier tracking link.
 
-Formula:
+### 9.2 Quantified Customer Integration Delta
 
-```text
-forecast = engineeringHours * hourlyRate + qaBudget
+Showcase in code comments and documentation that integrating Ghost Cursor required only:
+- **Frontend:** ~9 lines of JSX in `App.tsx` + `data-ghost-id` attributes on key buttons/inputs.
+- **Backend:** ~14 lines of setup in `main.py` + 1 tools registration module (`tools/ghost_tools.py`).
+- **Database:** Running standard migration `001_ghost_chat_schema.sql` for chat history persistence.
+- **Total Customer Delta:** **3 files modified, 3 files created, ~61 lines of code (< 1 hour of dev effort)**.
+
+## 10. Google ADK & Vertex AI Agent Engine
+
+The core agent orchestration is implemented in Python 3.12 using the **Google Agent Development Kit (ADK)** and Vertex AI Gemini 2.0 Flash / Pro.
+
+### 10.1 ADK Agent Definition (`services/orchestrator/app/agent.py`)
+
+- Instantiates `google.adk.agents.llm_agent.Agent` with `gemini-2.0-flash`.
+- Provides fixed **Frontend Action Tools**: `navigate`, `click`, `fill_input`, `toggle_switch`, `guided_tour`, `ask_clarification`.
+- Appends customer's dynamically registered **Backend Knowledge Tools** forwarded by the customer gateway.
+- Enforces strict single-tool-type response per turn and validation against registered logical target IDs.
+- For local testing without active GCP credentials, provide an explicit mock agent provider that replays deterministic tool call fixtures.
+
+## 11. Local Setup, Scripts and Packaging
+
+Provide clean setup scripts and reproducible local development:
+
+```bash
+# 1. Ghost Cursor Backend Orchestrator
+cd services/orchestrator
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8080
+
+# 2. Frontend SDK
+cd packages/sdk-frontend
+npm install
+npm run dev
+
+# 3. ShopHive Demo Application
+cd demo/shophive/frontend
+npm install
+npm run dev -- --port 3000
+
+cd demo/shophive/backend
+pip install -r requirements.txt
+uvicorn main:app --reload --port 8081
 ```
-
-Initial values:
-
-- Engineering hours: **700**.
-- Hourly rate: **$120**.
-- QA allocation: **$20,000**.
-- Initial forecast: **$104,000**.
-- Target budget: **$80,000**.
-- QA minimum: **$20,000**.
-
-Native field/tool constraints:
-
-- Hours: 100-2,000.
-- Hourly rate: 50-300.
-- QA: 20,000-100,000.
-
-Define read-only `forecast(engineeringHours, hourlyRate, qaBudget)` returning the validated assumptions and calculated total. The tool must not save or mutate application/financial data.
-
-Standard demo prompt: **"Bring Phoenix within $80,000 without reducing QA."**
-
-Mock proposal: **500 hours * $100/hour + $20,000 QA = $70,000**.
-
-Logical target -> DOM ID:
-
-| Target | DOM ID | Page/operation |
-|---|---|---|
-| `nav.assumptions` | `nav-assumptions` | global/click |
-| `nav.summary` | `nav-summary` | global/click |
-| `budget.hours` | `hours` | assumptions/setValue |
-| `budget.rate` | `rate` | assumptions/setValue |
-| `budget.qa` | `qa` | assumptions/setValue |
-| `budget.total` | `forecast-total` | summary/highlight |
-
-Mock sequence:
-
-1. Request forecast tool with 500/100/20000.
-2. After verified tool result, explain the proposed $70,000 scenario.
-3. Propose click `nav.assumptions`, set hours, set rate, preserve/set QA, click `nav.summary`, highlight `budget.total`.
-4. Wait for user approval.
-5. Execute normal navigation and native field interactions.
-6. Show summary and safe completion text based on reported outcomes.
-
-The mock is one explicitly scripted scenario, not a real general-purpose model. Real providers must respect arbitrary user constraints or ask questions instead of unconditionally forcing the demo assumptions.
-
-### 9.2 Ordinary client code, not copilot-only business logic
-
-Use controlled React inputs with normal onChange handlers. The integration module must NOT pass per-field React setters/Redux dispatchers for this demo. Browser tests must demonstrate that native interaction reaches those normal handlers and the forecast derived from React state changes accordingly.
-
-Use Next links with existing click handlers. Navigation verification waits for both pathname and destination page content. Keep SDK mounted across SPA routes.
-
-The website must work without the assistant. Support `?copilot=off` on fresh load to demonstrate that the client application is independent.
-💡
-### 9.3 Demo appearance
-
-Use a responsive dark dashboard with orange accent, clear project title, forecast/target/QA cards, readable assumption fields and a visible bottom-corner assistant. Provide instructions and explain that all data is synthetic. Do not require external fonts/network assets or original artwork to run the demo.
-
-### 9.4 Demo authentication and Django mode
-
-Provide `/api/login` and `/api/ghost`. Generate a random demo password and HMAC session secret locally. Use one-hour signed HttpOnly SameSite Strict cookies, secure cookies under HTTPS, exact configured-origin checks, safe errors and body limits. Never place these secrets in NEXT_PUBLIC variables.
-
-This simple demo login is not production identity/abuse protection. Customers retain their existing authentication; production demonstrations need proper access control and rate limiting.
-
-`DEMO_GATEWAY=node` uses the Node gateway helper in Next's server route. `DEMO_GATEWAY=django` makes the Next server relay to loopback Django, keeping the browser endpoint same-origin. Relay requires a server-held key, trusted demo subject, loopback address, no Origin header and explicit enablement. Disable the relay in production Next execution. It is only a demonstration bridge.
-
-The Django example also exposes a separate normal session/CSRF gateway view so real Django integrations do not copy the relay's CSRF exemption.
-
-## 10. LLM provider abstraction
-
-Implement a server-side interface equivalent to:
-
-```text
-Provider.generate({ input, history }) => Promise<Validated Plan>
-```
-
-History contains prior plans and acknowledged continuation events. Prompt policy requires strict JSON, approved capabilities/tools, grounded calculations, clarification for missing information, respect for constraints, no repeated completed actions, and no unsupported claims of success/persistence.
-
-Treat all application knowledge, UI/user text and tool results as data subordinate to service policy. Do not frame private Markdown as unrestricted system authority.
-
-### 10.1 Environment selection
-
-| LLM_PROVIDER | Credential/configuration |
-|---|---|
-| `mock` | No key; explicit development fixture; forbidden in production |
-| `openai` | `LLM_MODEL`, `OPENAI_API_KEY` |
-| `gemini` | `LLM_MODEL`, `GEMINI_API_KEY` |
-| `anthropic` | `LLM_MODEL`, `ANTHROPIC_API_KEY` |
-| `openai-compatible` | `LLM_MODEL`, `LLM_BASE_URL`, `LLM_API_KEY` |
-
-Keep keys only in `services/orchestrator/.env` locally and GCP Secret Manager in production. Provider selection/model/key changes require backend restart/redeploy, not frontend changes. Validate unknown/missing configuration at startup. Do not send OpenAI's key to a configurable third-party URL by accident.
-
-### 10.2 Vendor mapping
-
-- OpenAI: `/v1/chat/completions`, system/user messages, JSON object output mode for compatible models; read choices[0].message.content and stop reason.
-- Gemini Developer API: generateContent with systemInstruction, content parts, JSON MIME output, x-goog-api-key; reject blocked/incomplete responses.
-- Anthropic: Messages API, x-api-key and version header, system text, content blocks and output-token limit; reject truncated output.
-- Compatible endpoint: configurable base URL ending in `/v1`, append `/chat/completions`; do not assume vendor-specific JSON mode is supported.
-
-The baseline uses **strict JSON text plans containing explicit tool requests**, not native function-calling parity across vendors. Do not claim native tools or streaming if only JSON plans are implemented.
-
-Bound responses to 256 KiB, calls to approximately 200 seconds, and reject redirects. Parse complete JSON strictly, then validate the plan. Fail closed on prose, fences, missing fields, invalid tool calls, refusal/truncation or bad status. No silent provider fallback, no partial execution, and no fabricated token usage.
-
-Do not hardcode a model ID that has not been checked against the operator's account. Explain how to choose a model supporting the required API. Temperature, reasoning options and token parameters are not universally interchangeable.
-
-The `gemini` adapter is Developer API with a key. **Vertex AI ADC is a separate future adapter**, not enabled merely by setting a Google project ID. Document the extension without pretending it is present.
-
-Provide transport fixtures for all adapters and an explicit synthetic live smoke script. Running live smoke may incur charges and must not use customer data.
-
-## 11. Development OpenAI-compatible CLI shim
-
-Include a standalone Python shim so testing does not depend on the original SVQ checkout. Also document how to point at any existing compatible shim instead.
-
-Requirements:
-
-- Bind only `127.0.0.1:8765`.
-- GET `/health`; POST `/v1/chat/completions`.
-- Require Bearer token, default `SHIM_KEY=local` only for loopback development.
-- Reject browser Origin headers, streaming, and native tools requests.
-- Accept buffered role/content messages, assemble a strict JSON task prompt.
-- Limit request body to 64 KiB and portable CLI prompt to roughly 24K characters.
-- Configure `COPILOT_APP_JS`; execute Node plus that entrypoint directly on Windows, not a .cmd through cmd /c that can truncate multiline prompts.
-- Optional `COPILOT_MODEL`; verify CLI flags against the installed CLI version.
-- Use no shell, no broad permission grants, no customer repository working dir; run from a temporary directory with built-in/custom tools/instructions disabled where supported. The CLI still has local user identity; it is not a sandbox.
-- Timeout after 180 seconds; strict JSON parsing; safe errors without prompt/key logging. Single-request buffered handling and no cache are acceptable.
-- Return standard OpenAI content/choices/finish_reason format; no fake usage data.
-
-Recommended backend testing configuration:
-
-```dotenv
-LLM_PROVIDER=openai-compatible
-LLM_MODEL=copilot-cli
-LLM_BASE_URL=http://127.0.0.1:8765/v1
-LLM_API_KEY=local
-```
-
-Use synthetic data only. Never deploy the CLI shim as production SaaS infrastructure or expose it publicly. Cloud Run localhost refers to the container, not a developer laptop. A separately hosted compatible gateway needs HTTPS and authentication.
-
-## 12. Local setup, scripts and packaging
-
-Provide a clean quickstart and an idempotence-aware `setup-local` script. Generate random matching credentials in these ignored files, without printing values:
-
-1. `services/orchestrator/.env`:
-   PORT, DATABASE_URL, GHOST_TENANT_KEYS, LLM_PROVIDER, LLM_MODEL and selected key.
-2. `apps/demo-next/.env.local`:
-   GHOST_SERVICE_URL, GHOST_SERVICE_KEY, DEMO_ORIGIN, DEMO_PASSWORD,
-   DEMO_SESSION_SECRET, DEMO_GATEWAY, DEMO_RELAY_KEY.
-3. `examples/django-demo/.env`:
-   GHOST_SERVICE_URL, GHOST_SERVICE_KEY, DJANGO_SECRET_KEY, DEMO_RELAY_KEY,
-   DEMO_RELAY_ENABLED.
-
-Refuse to overwrite any existing secret file or create mismatched partial setup. Ship placeholder `.env.example` files, not credentials.
-
-Ports: Next 3000, Django 8000, hosted API 8080, PostgreSQL 5432, shim 8765.
-Default demo origin is `http://127.0.0.1:3000`; explain that using localhost instead will fail exact-origin checks unless configuration changes consistently.
-
-Compose provisions PostgreSQL with persistent volume, healthcheck and loopback-only published port. A clearly marked development-only database password is acceptable for local Compose, never for production. No memory fallback for normal dev API.
-
-Required commands or equivalents:
-
-```text
-npm ci
-npm run setup:local
-npm run schemas
-npm run typecheck
-npm test
-npm run build
-npm run build:demo
-docker compose up -d --wait
-npm run dev:api
-npm run dev:demo
-npx playwright install chromium
-npm run test:browser
-npm audit
-```
-
-Build shared packages before starting consumers. Root build order: protocol, Node gateway, SDK, hosted service; build the Next site separately.
-
-Python setup in a virtual environment:
-
-```text
-python -m venv .venv
-<venv-python> -m pip install -e ./adapters/django[demo]
-<venv-python> examples/django-demo/manage.py migrate
-<venv-python> examples/django-demo/manage.py runserver 127.0.0.1:8000 --noreload
-<venv-python> -m unittest discover -s adapters/django/tests
-```
-
-Document exact Windows PowerShell executable paths, and differences for Bash and Unix environments. Do not assume the IDE's shell is PowerShell just because the OS is Windows. Quote absolute executable paths when launching Python from a Windows command shell. Do not alter a user's global Node/npm/registry settings unnecessarily or disable TLS checks to solve installation problems.
-
-Generate schemas from TypeScript with an export script; include them in Python package data. Test `npm pack` for publishable packages and Python wheel creation. Local tarball installation must include protocol dependency resolution. Do not publish to npm/PyPI without explicit authorization and registry-name checks.
 
 Ignore node_modules, dist, .next, .venv, .env variants except examples, Python cache, local SQLite files, test artifacts, tarballs/wheels, Terraform state/plans and editor metadata. Docker build context must exclude secrets, local databases and state.
 
@@ -826,23 +654,21 @@ Do not report a test as passed merely because you wrote it. Run what the environ
 - Mock is prohibited in production; provider failures never switch to mock.
 - Live-provider tests are separate, opt-in and require real credentials.
 
-### 13.3 Real-browser acceptance for BOTH gateways
+### 13.3 Real-browser acceptance for ShopHive Demo
 
-Use Playwright with a self-started test-only API, Next demo and optionally Django. Tests can use the MemoryStore to remain independent of Docker, but must clearly state that they do not prove PostgreSQL behavior.
+Use Playwright with a self-started test-only orchestrator API and the ShopHive demo application:
 
-For Node and Django separately:
-
-1. Log in using generated demo credentials without embedding them in test source.
-2. Confirm initial summary is $104,000.
-3. Send the standard budget request.
-4. Confirm a proposed action plan appears and no values change before approval.
-5. Approve and observe SPA navigation to assumptions.
-6. Verify normal React state changes—not merely assigned input DOM properties.
-7. Confirm return to summary with $70,000.
-8. Reopen assumptions and verify 500 hours, 100 rate, 20,000 QA persisted in app state.
-9. Verify browser fetch/XHR uses only its client origin, not Ghost/model endpoints.
-10. Verify response lacks Brain/tool internals/canary and private Brain URL is 404.
-11. Verify unauthenticated gateway call is 401.
+1. Open ShopHive homepage (`/`) and verify the product grid and `<GhostCursor />` widget are mounted.
+2. Navigate to the product page (Air Max 90).
+3. Send request: *"Add the Air Max 90 in size 10 to my cart"*.
+4. Confirm a proposed action plan appears (`navigate`, `click` size 10, `click` Add to Cart) and no values change before approval.
+5. Click *"Approve and Run"* and observe AI cursor animation across the screen to select size 10 and click Add to Cart.
+6. Verify native React state changes — the cart counter animates from 0 to 1 (not merely detached property assignments).
+7. Proceed to checkout, trigger the clarifying address question, and verify form field auto-filling.
+8. Verify customer read-only tool execution (`lookup_order`, `check_warehouse_stock`) and 3-step return tour overlay.
+9. Verify browser fetch/XHR uses only its same-origin client gateway (`/api/ghost-cursor`), never direct Ghost Cloud or model endpoints.
+10. Verify public envelope lacks Brain internals/canary and canary strings are filtered.
+11. Verify unauthenticated gateway calls return 401.
 
 Also cover stop/dispose, failed control changes, native select/checkbox/radio, constraints, stale targets and custom-verifier behavior. Use reduced-motion tests and appropriate accessible selectors where possible.
 
@@ -958,14 +784,12 @@ Do not present checks as complete when Docker, Terraform, cloud access or provid
 
 1. Inspect workspace, preserve existing work, write MEMORY and initial README.
 2. Establish workspace, packages, strict schemas and generated Python contracts.
-3. Implement provider interface/mock and authenticated PostgreSQL-backed run API.
-4. Implement Node/Django gateways and private local-tool continuation.
-5. Implement framework-neutral SDK and standard-control execution with approval.
-6. Build independent Phoenix demo and isolated integration module.
-7. Add Node/Django/provider tests and both-gateway browser acceptance.
-8. Add provider configuration/live smoke and local shim.
-9. Finish package distribution, containers, GCP foundation and detailed guides.
-10. Run builds/tests/audits, fix relevant issues, record verified results and gaps.
+3. Implement Google ADK agent engine (`services/orchestrator`) with Gemini 2.0 Flash and mock test fixtures.
+4. Implement Backend SDK (`ghost_cursor`) with Dynamic Brain Loader, `SQLAlchemyChatStore`, and Gateway Tool Loopback.
+5. Implement Frontend SDK (`@ghost-cursor/sdk`) with Shadow DOM sandboxing and Element Targeting Cascade.
+6. Build independent ShopHive demo storefront (`demo/shophive`) with React frontend and FastAPI backend.
+7. Add Python ADK tests, Brain loader tests, and Playwright browser acceptance tests.
+8. Add GCP Cloud Run deployment configuration and documentation.
 
 At completion summarize files/packages implemented, exact checks passed, checks not run and why, how to start the demo, where keys belong, and remaining production work. Do not dump secrets, claim deployment without evidence, or imply that a generic input engine works on every possible web widget with zero integration.
 

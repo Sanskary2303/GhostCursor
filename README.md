@@ -206,12 +206,12 @@ Fully managed by us. Deployed on **GCP Cloud Run** — zero cluster management, 
 | Component | Responsibility | GCP Service |
 |---|---|---|
 | **API Gateway** | Rate limiting, tenant identification (API key), request routing | Cloud Run (built into the FastAPI app) |
-| **Orchestrator / Agent** | Core agentic loop. Receives user messages + page context. Classifies intent. Plans and executes multi-step actions. | Cloud Run (Python/FastAPI) |
-| **LLM Gateway** | Abstraction over Gemini models via Vertex AI. Prompt management, token budgeting, response streaming. | Vertex AI (Gemini 2.0 Flash / Pro) |
-| **Backend Tools** | Pluggable tool functions: ROI calculator, data APIs, search, customer-specific custom tools. | Python functions inside the agent |
-| **Session & Memory Store** | Per-user conversation history, action audit trail, working memory for multi-step tasks. | Firestore |
-| **Tenant Configuration** | Per-customer settings: branding, allowed actions, custom tools, page schemas. | Firestore |
-| **Logging & Monitoring** | Interaction tracking, error logging, performance metrics. | Cloud Logging + Cloud Monitoring |
+| **Orchestrator / Agent** | Google Agent Development Kit (ADK) multi-turn agentic loop. Receives user messages + page context. Plans and executes actions with Gemini 2.0. | Cloud Run (Python 3.12 / FastAPI + Google ADK) |
+| **LLM Gateway** | Abstraction over Gemini models via Vertex AI (Gemini 2.0 Flash / Pro). Prompt management, token budgeting, response streaming. | Vertex AI (Gemini 2.0 Flash / Pro) |
+| **Backend Tools** | Customer-registered read-only tools executed via Gateway Loopback (Reverse-Dispatch) under authentic user session (`X-Ghost-Subject`). | Executed on Customer Backend via SDK |
+| **Session & Run State Store** | Ephemeral multi-turn run state, revision tracking, and event deduplication (TTL 30m). Persistent chat history is customer-owned in customer DB. | Firestore / Cloud SQL (PostgreSQL 17) |
+| **Tenant Configuration** | Per-customer settings: branding, allowed actions, registered backend tool declarations, page schemas. | Firestore / Cloud SQL |
+| **Logging & Monitoring** | Structured run interaction tracking, error logging, performance metrics. | Cloud Logging + Cloud Monitoring |
 
 #### Orchestrator Agent — Decision Loop
 
@@ -223,8 +223,8 @@ Fully managed by us. Deployed on **GCP Cloud Run** — zero cluster management, 
 │           │                                                      │
 │           ▼                                                      │
 │  ┌─────────────────┐                                            │
-│  │ Intent Classifier│                                            │
-│  │ (Gemini-powered) │                                            │
+│  │ Google ADK Agent│                                            │
+│  │ (Gemini 2.0)    │                                            │
 │  └────────┬────────┘                                            │
 │           │                                                      │
 │     ┌─────┼─────┬──────────┬──────────┬───────────┐             │
@@ -232,14 +232,14 @@ Fully managed by us. Deployed on **GCP Cloud Run** — zero cluster management, 
 │  [Chat] [Act] [Tour]  [Clarify]  [Tool Call]  [Multi-Step]     │
 │     │     │     │          │          │           │             │
 │     ▼     ▼     ▼          ▼          ▼           ▼             │
-│  Text   Action  Tour     Question   Tool       Plan +          │
-│  Reply  Commands Sequence  to User   Result     Sub-steps      │
+│  Text   Action  Tour     Question   Customer    Plan +         │
+│  Reply  Commands Sequence  to User   Tool Loop   Sub-steps      │
 │           │     │          │          │           │             │
 │           └─────┴──────────┴──────────┴───────────┘             │
 │                        │                                         │
 │                        ▼                                         │
 │               Response to Frontend                               │
-│               (via WebSocket)                                    │
+│               (via WebSocket / HTTP)                             │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -252,13 +252,13 @@ Fully managed by us. Deployed on **GCP Cloud Run** — zero cluster management, 
   "content": "You're on the Air Max 90 product page. Available sizes: 8, 9, 10, 11. The price is $129.99."
 }
 
-// Type 2: UI Action command (AI Cursor Auto-Actions)
+// Type 2: UI Action tool call (AI Cursor Auto-Actions with Element Targeting Cascade)
 {
   "type": "action",
   "steps": [
-    { "action": "navigate", "target": "/products/air-max-90" },
-    { "action": "click", "selector": "[data-size='10']" },
-    { "action": "click", "selector": "#add-to-cart-btn" }
+    { "tool": "navigate", "parameters": { "target_page": "products/air-max-90" } },
+    { "tool": "click", "parameters": { "target_id": "product.size.10" } },
+    { "tool": "click", "parameters": { "target_id": "product.add_to_cart_btn" } }
   ]
 }
 
@@ -273,9 +273,9 @@ Fully managed by us. Deployed on **GCP Cloud Run** — zero cluster management, 
 {
   "type": "tour",
   "steps": [
-    { "selector": "#orders-nav", "message": "First, click on Orders in the sidebar", "spotlight": true },
-    { "selector": ".order-row:first-child", "message": "Here's your most recent order", "spotlight": true },
-    { "selector": ".tracking-link", "message": "Click this link to see real-time tracking", "spotlight": true }
+    { "target_id": "nav.orders", "message": "First, click on Orders in the sidebar", "spotlight": true },
+    { "target_id": "orders.recent_item", "message": "Here's your most recent order", "spotlight": true },
+    { "target_id": "orders.tracking_link", "message": "Click this link to see real-time tracking", "spotlight": true }
   ]
 }
 
@@ -480,12 +480,12 @@ urlpatterns += ghost_cursor_urls("/api/ghost-cursor/")
 │         ▼         ▼          ▼                                      │
 │  ┌─────────┐ ┌─────────┐ ┌─────────────┐                           │
 │  │ Vertex  │ │Firestore│ │ Cloud       │                           │
-│  │ AI      │ │         │ │ Logging     │                           │
-│  │         │ │Sessions │ │             │                           │
-│  │ Gemini  │ │Tenants  │ │ Structured  │                           │
-│  │ 2.0     │ │Configs  │ │ logs for    │                           │
-│  │ Flash / │ │History  │ │ debugging   │                           │
-│  │ Pro     │ │         │ │ & analytics │                           │
+│  │ AI      │ │/ Cloud  │ │ Logging     │                           │
+│  │         │ │  SQL    │ │             │                           │
+│  │ Gemini  │ │         │ │ Structured  │                           │
+│  │ 2.0     │ │Runs     │ │ logs for    │                           │
+│  │ Flash / │ │Tenants  │ │ debugging   │                           │
+│  │ Pro     │ │Configs  │ │ & analytics │                           │
 │  └─────────┘ └─────────┘ └─────────────┘                           │
 │                                                                      │
 │  ┌─────────────────────────────────┐                                │
@@ -493,6 +493,7 @@ urlpatterns += ghost_cursor_urls("/api/ghost-cursor/")
 │  │                                 │                                │
 │  │  React Frontend (static)        │                                │
 │  │  + FastAPI Backend (proxy)      │                                │
+│  │  + Customer DB (Chat History)   │                                │
 │  │  + Ghost Cursor SDK integrated  │                                │
 │  │                                 │                                │
 │  │  Scaling: min=0, max=1          │                                │
@@ -506,7 +507,7 @@ urlpatterns += ghost_cursor_urls("/api/ghost-cursor/")
 |---|---|---|
 | **Cloud Run** | Hosts both the Ghost Cursor API and the ShopHive demo app | Zero cluster management, scales to zero (free when idle), built-in HTTPS, WebSocket support, deploy with a single `gcloud run deploy` command |
 | **Vertex AI (Gemini)** | LLM for intent classification, action planning, conversation | Google's own AI — perfect for a Google hackathon. Gemini 2.0 Flash for speed, Pro for complex reasoning. Native GCP integration = no API key management hassles |
-| **Firestore** | Sessions, tenant config, conversation history, action logs | Serverless NoSQL — zero provisioning, real-time listeners, free tier generous (50K reads/day). Perfect for prototype scale |
+| **Firestore / Cloud SQL (PostgreSQL 17)** | Ephemeral multi-turn run state, event deduplication, tenant config | Ephemeral run storage with 30-minute TTL. Persistent chat histories are maintained in the customer's own database |
 | **Cloud Storage + Cloud CDN** | Hosts and serves the Frontend SDK JS bundle | Global low-latency delivery. GCS is dirt cheap for static files |
 | **Cloud Logging** | Structured logging for debugging and analytics | Automatic integration with Cloud Run — zero setup. Queryable logs |
 | **Cloud Monitoring** | Uptime checks, latency dashboards, error alerting | Automatic Cloud Run metrics. Set up a basic dashboard for the demo |
@@ -518,9 +519,9 @@ urlpatterns += ghost_cursor_urls("/api/ghost-cursor/")
 | Skipped Service | Reason |
 |---|---|
 | ~~GKE (Kubernetes)~~ | Overkill for 5 users. Cloud Run gives us containers without cluster management |
-| ~~Cloud SQL (PostgreSQL)~~ | Relational DB unnecessary for prototype. Firestore covers sessions + config with zero provisioning |
+| ~~Centralized Customer Chat DB~~ | Anti-pattern for enterprise SaaS. Customer stores persistent chat history in their own database for GDPR/data sovereignty |
 | ~~Pub/Sub~~ | No async event streaming needed at prototype scale. Direct function calls suffice |
-| ~~Memorystore (Redis)~~ | No caching layer needed at 5-user scale. Firestore latency (~50ms) is fine |
+| ~~Memorystore (Redis)~~ | No caching layer needed at 5-user scale. Firestore / in-memory latency (~50ms) is fine |
 | ~~Cloud Tasks~~ | No background job queue needed. Everything runs synchronously in the agent loop |
 | ~~Cloud Armor~~ | WAF/DDoS protection unnecessary for hackathon demo |
 
@@ -555,29 +556,31 @@ urlpatterns += ghost_cursor_urls("/api/ghost-cursor/")
 |---|---|---|
 | Cloud Run | ~\$0 | Free tier: 2M requests/month, 360K vCPU-sec. Prototype won't come close |
 | Vertex AI (Gemini) | ~\$5-15 | Pay per token. Flash is cheap (~\$0.075/1M input tokens). Demo = ~1K conversations |
-| Firestore | ~\$0 | Free tier: 50K reads, 20K writes, 20K deletes per day |
+| Firestore / Cloud SQL | ~\$0 | Free tier: 50K reads, 20K writes, 20K deletes per day |
 | Cloud Storage | ~\$0.01 | Hosting a single JS file |
 | **Total** | **~\$5-15** | Almost entirely LLM costs |
 
-### Multi-Tenancy Strategy
+### Multi-Tenancy & Data Sovereignty Strategy
 
 > [!NOTE]
-> For the hackathon prototype, multi-tenancy is simple: a `tenant_id` field on every Firestore document. No infrastructure isolation. At production scale, this would evolve into namespace-level or project-level isolation for enterprise customers.
+> Ghost Cursor enforces strict **customer data sovereignty**: persistent chat histories, messages, and transcripts remain inside the customer's own database via Backend SDK schema adapters. Ghost Cursor Cloud holds only ephemeral multi-turn run states (auto-expired after 30 minutes) and tenant configuration.
 
-```
-Firestore Structure:
-─────────────────────
+```text
+Ghost Cursor Cloud (Ephemeral Run Store):
+────────────────────────────────────────
 tenants/
   └── {tenant_id}/
-        ├── config          ← branding, allowed actions, feature flags
-        ├── sessions/
-        │     └── {session_id}/
-        │           ├── messages[]
-        │           ├── page_context (latest)
-        │           └── action_history[]
-        └── analytics/
-              └── {date}/
-                    └── events[]
+        ├── config          ← branding, allowed actions, backend tool schemas
+        └── runs/
+              └── {run_id}/ ← ephemeral state machine (TTL: 30 minutes)
+                    ├── revision (optimistic locking)
+                    ├── deduplication (event hashes)
+                    └── status (awaiting_actions, completed, etc.)
+
+Customer Database (Customer Data Sovereignty):
+─────────────────────────────────────────────
+ghost_chat_sessions (session_id, user_id, title, summary, created_at)
+ghost_chat_messages (message_id, session_id, role, content, tool_calls, client_actions)
 ```
 
 ### Data Flow & Security
@@ -642,9 +645,9 @@ tenants/
 ```
 User: "Add Air Max 90 size 10 to my cart"
 Agent plans:
-  1. navigate → /products/air-max-90
-  2. click → [data-size="10"]
-  3. click → #add-to-cart-btn
+  1. navigate(target_page="products/air-max-90")
+  2. click(target_id="product.size.10")
+  3. click(target_id="product.add_to_cart_btn")
 AI Cursor animates through each step. Cart counter updates. ✓
 ```
 
@@ -733,8 +736,8 @@ Tour steps:
 | Language | Python 3.12 | Fast development, rich AI/ML ecosystem, team expertise |
 | Framework | FastAPI | Async-native, WebSocket support, auto-generated OpenAPI docs, fast |
 | LLM | Vertex AI — Gemini 2.0 Flash / Pro | Google's own LLM — native GCP integration, great for Google hackathon, competitive quality |
-| Agent Framework | LangChain + Google GenAI SDK | Flexible agent loop with tool calling, memory, streaming. LangChain for orchestration, `google-genai` for Vertex AI |
-| Database | Firestore | Serverless, zero provisioning, real-time, generous free tier |
+| Agent Framework | Google Agent Development Kit (ADK) | Native Gemini 2.0 tool-calling, typed function declarations, structured multi-turn agentic loop |
+| Database | Firestore / Cloud SQL (PostgreSQL 17) | Ephemeral run state, deduplication, tenant configs (30-minute TTL). Chat history is customer-owned in customer DB |
 | Hosting | Cloud Run | Zero cluster management, auto-scale, single deploy command |
 | Logging | Cloud Logging | Automatic Cloud Run integration |
 | Secrets | Secret Manager | Secure, auto-integrated with Cloud Run env vars |
@@ -745,7 +748,7 @@ Tour steps:
 |---|---|---|
 | Frontend | React 18 + Vite + TailwindCSS | Fast to build, looks professional, component library ecosystem |
 | Backend | FastAPI (Python) | Same language as Ghost Cursor backend — fewer context switches. Serves as the "customer backend" with Ghost Cursor SDK integrated |
-| Data | In-memory / JSON files | No database needed for demo. Hardcoded product catalog, mock orders |
+| Data | SQLite / PostgreSQL + JSON | Customer database stores chat history via SDK migrations; mock product catalog |
 | Hosting | Cloud Run | Single container: serves React build + FastAPI API |
 
 ---
@@ -759,7 +762,7 @@ Tour steps:
 | **Decision** | Use Python 3.12 with FastAPI for the Ghost Cursor orchestrator backend |
 | **Context** | Hackathon prototype needing rapid development with the best AI/ML ecosystem |
 | **Alternatives** | Spring Boot/Kotlin (production-grade but slower to develop), Node.js (good but weaker AI libs), Go (fast but minimal AI ecosystem) |
-| **Trade-offs** | Python's GIL limits true CPU parallelism (mitigated by async I/O — our workload is I/O-bound anyway: waiting on LLM responses, DB calls). Slightly higher memory than Go. But gains: fastest development speed, best AI library ecosystem (LangChain, google-genai), team expertise, rapid prototyping |
+| **Trade-offs** | Python's GIL limits true CPU parallelism (mitigated by async I/O — our workload is I/O-bound anyway: waiting on LLM responses, DB calls). Slightly higher memory than Go. But gains: fastest development speed, best AI library ecosystem (Google ADK, google-genai), team expertise, rapid prototyping |
 | **Status** | ✅ Accepted |
 
 ### D-002: GCP Cloud Run Over GKE
@@ -782,14 +785,14 @@ Tour steps:
 | **Trade-offs** | Gemini function calling has some quirks vs OpenAI's mature tooling. Smaller third-party ecosystem. But gains: native GCP integration (no separate API keys, uses service account), impresses hackathon judges, competitive quality (Gemini 2.0 Flash is fast + cheap), Vertex AI is SOC2/HIPAA compliant out of the box |
 | **Status** | ✅ Accepted |
 
-### D-004: Firestore Over Cloud SQL
+### D-004: Ephemeral Run Store & Customer Database Sovereignty
 
 | Aspect | Detail |
 |---|---|
-| **Decision** | Use Firestore (NoSQL) instead of Cloud SQL (PostgreSQL) for all data storage |
-| **Context** | Prototype needs flexible schemas for sessions, configs, and logs. Zero provisioning time budget |
-| **Alternatives** | Cloud SQL for PostgreSQL (structured data, relational queries), AlloyDB (overkill), Bigtable (overkill), in-memory only (no persistence across restarts) |
-| **Trade-offs** | No SQL queries (can't do complex JOINs for analytics). Data model must be designed for document access patterns. But gains: zero provisioning, generous free tier, real-time listeners (could be useful for live dashboard), flexible schema (evolve fast during hackathon), sub-millisecond reads |
+| **Decision** | Ghost Cursor Cloud uses Firestore / Cloud SQL strictly for ephemeral run states (deduplication, optimistic concurrency, 30m TTL), while persistent chat histories are stored exclusively in the customer's own database |
+| **Context** | Enterprise SaaS compliance (GDPR, SOC2, data sovereignty) mandates that customer conversation transcripts never sit unmanaged in a third-party cloud |
+| **Alternatives** | Centralized multi-tenant chat database on Ghost Cursor Cloud (creates vendor lock-in, data sovereignty violations, and compliance liabilities) |
+| **Trade-offs** | Requires customer backend SDK to run migrations and persist chat logs. Mitigated by SDK providing ready-made schemas (`ghost_chat_sessions`, `ghost_chat_messages`) and `SQLAlchemyChatStore` abstractions |
 | **Status** | ✅ Accepted |
 
 ### D-005: Proxy Architecture (FE → Customer Backend → Ghost Cursor Cloud)
@@ -802,15 +805,15 @@ Tour steps:
 | **Trade-offs** | Adds one network hop of latency (~10-30ms). Requires customers to add a backend route. But gains: security (no API keys in browser), realistic demo of how real customers would integrate, server-side context enrichment |
 | **Status** | ✅ Accepted |
 
-### D-006: Confirmation-First Action Execution
+### D-006: Approval-First Action Execution
 
 | Aspect | Detail |
 |---|---|
-| **Decision** | Default to `requireConfirmation: true` — the AI proposes actions but the user approves first |
-| **Context** | Trust and safety. Automated actions without consent could be dangerous |
-| **Alternatives** | Auto-execute everything (faster demo but scary), always require confirmation (safe but slow for simple actions) |
-| **Trade-offs** | Adds UX friction. For the hackathon demo, we'll use a **hybrid**: safe actions (scroll, navigate) auto-execute; mutating actions (add to cart, checkout, form submit) require confirmation. This makes the demo flow fast while showing the safety feature |
-| **Status** | ✅ Accepted — hybrid mode for demo |
+| **Decision** | Enforce approval-first execution (`requireConfirmation: true`) — mutating or multi-step action sequences require explicit user confirmation ("Approve and Run") prior to execution |
+| **Context** | Trust and safety. Automated actions without consent could perform unintended purchases or data mutations |
+| **Alternatives** | Auto-execute everything (dangerous and scary), never confirm (unrealistic for SaaS transactions) |
+| **Trade-offs** | Adds a confirmation step before execution. But gains: absolute user safety, auditability, prevents unintended cart checkout or sensitive field modification |
+| **Status** | ✅ Accepted |
 
 ### D-007: Shadow DOM for Chat Widget
 
@@ -850,6 +853,26 @@ Tour steps:
 | **Context** | Need a polished, professional-looking demo app fast |
 | **Alternatives** | Next.js (SSR adds complexity), Vue (team less familiar), vanilla HTML (too slow to build, looks amateur) |
 | **Trade-offs** | React adds a build step and bundle size. But gains: fastest development with component libraries, TailwindCSS for instant professional styling, easy Ghost Cursor React SDK integration |
+| **Status** | ✅ Accepted |
+
+### D-011: Gateway Loopback (Reverse-Dispatch) for Customer Backend Tools
+
+| Aspect | Detail |
+|---|---|
+| **Decision** | Customer backend read-only tools are executed on the customer's own backend gateway via a cryptographically signed HMAC reverse-dispatch loop rather than direct inbound HTTP calls |
+| **Context** | Customer internal databases and private microservices cannot be opened up to the public internet |
+| **Alternatives** | Direct webhooks into customer private networks (requires opening firewall ports or VPNs) |
+| **Trade-offs** | Requires turn coordination between Cloud Run orchestrator and customer gateway. But gains: zero firewall exposure, customer authorizes execution with active user session (`X-Ghost-Subject`), HMAC-SHA256 verification |
+| **Status** | ✅ Accepted |
+
+### D-012: Customer-Owned Chat History via SDK Abstraction
+
+| Aspect | Detail |
+|---|---|
+| **Decision** | The Backend SDK provides ready-to-run database migrations and `SQLAlchemyChatStore` for the customer's database, while Ghost Cursor Cloud remains stateless regarding user chat logs |
+| **Context** | Customers need out-of-the-box session management, multi-turn history replay, and auto-summarization without surrendering data privacy |
+| **Alternatives** | Leave chat persistence entirely to the customer to code from scratch (high integration friction) |
+| **Trade-offs** | Customer database must run standard SQL migration. But gains: immediate out-of-the-box session APIs, auto-summarization, and 100% compliance |
 | **Status** | ✅ Accepted |
 
 ---
@@ -949,25 +972,18 @@ ghost-cursor/
 │   └── orchestrator/                # Ghost Cursor Cloud Backend
 │       ├── app/
 │       │   ├── main.py              # FastAPI app entry point
-│       │   ├── agent/
-│       │   │   ├── orchestrator.py   # Core agent loop
-│       │   │   ├── intent.py         # Intent classification
-│       │   │   ├── planner.py        # Action planning
-│       │   │   └── memory.py         # Conversation memory
+│       │   ├── agent.py             # Google ADK agent definition & tools
+│       │   ├── brain_loader.py      # Dynamic Brain resolver (platform.md + {page}.md)
 │       │   ├── tools/
-│       │   │   ├── roi_calculator.py # ROI Sensitivity tool
-│       │   │   ├── data_api.py       # Data query tool
-│       │   │   └── registry.py       # Tool registration
+│       │   │   ├── frontend_actions.py # navigate, click, fill_input, tour, clarify
+│       │   │   └── loopback.py      # Gateway loopback for customer tools
 │       │   ├── llm/
-│       │   │   ├── gemini.py         # Vertex AI / Gemini client
-│       │   │   └── prompts.py        # System prompts & templates
+│       │   │   └── vertex.py        # Vertex AI / Gemini 2.0 configuration
 │       │   ├── models/
-│       │   │   ├── messages.py       # Request/response schemas
-│       │   │   └── actions.py        # Action command schemas
-│       │   ├── storage/
-│       │   │   └── firestore.py      # Firestore operations
-│       │   └── websocket/
-│       │       └── handler.py        # WebSocket connection handler
+│       │   │   ├── run.py           # Multi-turn run state & revisions
+│       │   │   └── contracts.py     # Protocol v1 schemas
+│       │   └── storage/
+│       │       └── run_store.py     # Ephemeral run storage & deduplication
 │       ├── Dockerfile
 │       ├── requirements.txt
 │       └── cloudbuild.yaml
@@ -1090,7 +1106,7 @@ gsutil cp packages/sdk-frontend/dist/ghost-cursor.min.js \
 - [ ] AI Cursor Auto-Actions (click, fill, navigate, scroll)
 - [ ] Smart Clarifying Questions
 - [ ] Guided Explainers (Tour Overlay)
-- [ ] ROI Sensitivity Insight (Backend Tool)
+- [ ] Backend Tools
 - [ ] ShopHive demo app (React + FastAPI)
 - [ ] GCP deployment (Cloud Run + Firestore + Vertex AI)
 - [ ] Demo script rehearsed and polished

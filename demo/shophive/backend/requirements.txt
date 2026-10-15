@@ -6,8 +6,7 @@ uvicorn[standard]>=0.27.0
 pydantic>=2.6.0
 pydantic-settings>=2.1.0
 
-# Ghost Cursor Backend SDK (local install)
--e ../..
+# Install the Ghost Cursor SDK separately from the repo root: pip install -e packages/sdk-server-python
 
 # Database
 sqlalchemy>=2.0.0

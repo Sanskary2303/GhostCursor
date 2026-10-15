@@ -9,6 +9,15 @@ async function ask(page: Page, text: string) {
 }
 const approve = (page: Page) => page.getByRole('button', { name: 'Approve and Run' }).click();
 
+test.beforeEach(async ({ page }) => {
+  await page.goto('/');
+  const btn = page.getByRole('button', { name: 'Sign in (demo)' });
+  if (await btn.isVisible()) {
+    await btn.click();
+    await expect(page.getByText('Hi, demo')).toBeVisible();
+  }
+});
+
 test('widget is mounted', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('button', { name: 'Open Ghost Cursor chat' })).toBeVisible();
@@ -71,4 +80,19 @@ test('browser only talks to its own gateway and gets a public envelope', async (
     expect(JSON.stringify(b)).not.toContain('GHOST_BRAIN_SERVER_ONLY_CANARY_2026');
   }
 });
+
+test('unauthenticated POST to /api/ghost-cursor returns 401', async ({ playwright }) => {
+  const req = await playwright.request.newContext();
+  const res = await req.post('http://127.0.0.1:8081/api/ghost-cursor', {
+    data: {
+      command: 'start',
+      protocolVersion: '1',
+      requestId: 'test-req',
+      message: 'Hi',
+      context: { page: 'home', values: {}, availableTargets: [] },
+    },
+  });
+  expect(res.status()).toBe(401);
+});
+
 

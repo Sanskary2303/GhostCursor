@@ -14,8 +14,9 @@ backend_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(backend_dir))
 sys.path.insert(0, str(backend_dir.parent.parent / "packages" / "sdk-server-python"))
 
-from fastapi import FastAPI, Depends, Request
-from fastapi.middleware.cors import CORSMiddleware
+import secrets
+from fastapi import FastAPI, Depends, Request, HTTPException
+from starlette.middleware.sessions import SessionMiddleware
 
 # Import Ghost Cursor SDK
 try:
@@ -48,14 +49,35 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# CORS
+SESSION_SECRET = os.getenv("SHOPHIVE_SESSION_SECRET") or secrets.token_urlsafe(32)  # random per start in dev
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    SessionMiddleware,
+    secret_key=SESSION_SECRET,
+    same_site="lax",
+    https_only=os.getenv("SHOPHIVE_SECURE_COOKIES") == "1",
+    max_age=8 * 3600,
 )
+
+DEMO_USERS = {"demo": "user_demo"}
+ALLOWED_ORIGINS = {
+    o
+    for o in os.getenv("SHOPHIVE_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if o
+}
+
+
+def require_user(request: Request) -> str:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="login_required")
+    return user_id
+
+
+def same_origin(request: Request) -> None:
+    origin = request.headers.get("origin")
+    own = f"{request.url.scheme}://{request.url.netloc}"
+    if origin and origin != own and origin not in ALLOWED_ORIGINS:
+        raise HTTPException(status_code=403, detail="bad_origin")
 
 # ============================================================================
 # Initialize Ghost Cursor Backend
@@ -104,6 +126,28 @@ async def get_product(product_id: str):
         raise HTTPException(status_code=404, detail="Product not found")
     return product
 
+@app.post("/api/login", dependencies=[Depends(same_origin)])
+async def login(request: Request):
+    data = await request.json()
+    username = data.get("username")
+    if username in DEMO_USERS:
+        request.session["user_id"] = DEMO_USERS[username]
+        request.session["username"] = username
+        return {"user": username}
+    raise HTTPException(status_code=401, detail="invalid_credentials")
+
+@app.post("/api/logout", dependencies=[Depends(same_origin)])
+async def logout(request: Request):
+    request.session.clear()
+    return {"ok": True}
+
+@app.get("/api/me")
+async def me(request: Request):
+    username = request.session.get("username")
+    if not username:
+        raise HTTPException(status_code=401, detail="login_required")
+    return {"user": username}
+
 # ============================================================================
 # Ghost Cursor Integration
 # ============================================================================
@@ -112,16 +156,16 @@ from fastapi import APIRouter
 
 ghost_router = APIRouter(prefix="/api/ghost-cursor", tags=["ghost-cursor"])
 
-@ghost_router.post("")
-@ghost_router.post("/run")
-@ghost_router.post("/continue")
-async def handle_ghost_turn(request: Request, user_id: str = "anonymous"):
+@ghost_router.post("", dependencies=[Depends(same_origin)])
+@ghost_router.post("/run", dependencies=[Depends(same_origin)])
+@ghost_router.post("/continue", dependencies=[Depends(same_origin)])
+async def handle_ghost_turn(request: Request, user_id: str = Depends(require_user)):
     """Handle Ghost Cursor conversation turns"""
     payload = await request.json()
     return await ghost.handle_turn(payload=payload, user_id=user_id)
 
 @ghost_router.get("/sessions")
-async def list_sessions(user_id: str = "anonymous"):
+async def list_sessions(user_id: str = Depends(require_user)):
     """List user chat sessions"""
     if ghost.chat_store:
         sessions = await ghost.chat_store.list_sessions(user_id)

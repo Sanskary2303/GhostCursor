@@ -62,6 +62,7 @@ def register_shophive_tools(ghost: GhostCursorBackend):
     mock_orders = {
         "SH-1024": {
             "order_id": "SH-1024",
+            "owner": "user_demo",
             "customer_name": "John Doe",
             "items": [
                 {"name": "Nike Air Max 90", "size": "10", "price": 129.99, "quantity": 1},
@@ -75,6 +76,7 @@ def register_shophive_tools(ghost: GhostCursorBackend):
         },
         "SH-987": {
             "order_id": "SH-987",
+            "owner": "user_other",
             "customer_name": "Jane Smith",
             "items": [
                 {"name": "Air Jordan 1 Retro", "size": "10", "price": 179.99, "quantity": 1},
@@ -119,9 +121,11 @@ def register_shophive_tools(ghost: GhostCursorBackend):
         # In production, this would query the actual database
         # order = await fetch_order_from_db(params.order_id, user_id)
 
-        # For demo, return mock data if order exists
+        # For demo, return mock data if order exists and belongs to user
         if params.order_id in mock_orders:
             order = mock_orders[params.order_id]
+            if order.get("owner") != context.get("user_id"):
+                return {"error": f"Order {params.order_id} not found"}
             return {
                 "order_id": order["order_id"],
                 "customer_name": order["customer_name"],
@@ -135,7 +139,7 @@ def register_shophive_tools(ghost: GhostCursorBackend):
             }
         else:
             return {
-                "error": f"Order {params.order_id} not found or unauthorized access",
+                "error": f"Order {params.order_id} not found",
             }
 
     @ghost.register_tool(

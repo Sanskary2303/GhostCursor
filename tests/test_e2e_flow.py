@@ -12,6 +12,7 @@ from httpx import AsyncClient, ASGITransport
 
 # Import both apps
 from services.orchestrator.app.main import app as orch_app
+from services.orchestrator.app.llm.vertex import MockVertexAIClient
 sys.path.insert(0, "demo/shophive/backend")
 from main import app as shop_app, ghost
 
@@ -33,6 +34,10 @@ async def test_e2e_action_planning_flow(monkeypatch):
     monkeypatch.setattr(ghost, "_get_http_client", mock_get_http_client.__get__(ghost, type(ghost)))
 
     async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        # Log in first
+        login_res = await client.post("/api/login", json={"username": "demo"})
+        assert login_res.status_code == 200
+
         # 1. Frontend sends start command
         start_payload = {
             "command": "start",
@@ -103,6 +108,10 @@ async def test_e2e_gateway_loopback_tool_execution(monkeypatch):
     monkeypatch.setattr(ghost, "_get_http_client", mock_get_http_client.__get__(ghost, type(ghost)))
 
     async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        # Log in first
+        login_res = await client.post("/api/login", json={"username": "demo"})
+        assert login_res.status_code == 200
+
         payload = {
             "command": "start",
             "protocolVersion": "1",
@@ -127,4 +136,85 @@ async def test_e2e_gateway_loopback_tool_execution(monkeypatch):
         assert sessions_res.status_code == 200
         sessions_data = sessions_res.json()
         assert len(sessions_data["sessions"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_request_rejected():
+    """Unauthenticated request to /api/ghost-cursor returns 401."""
+    shop_transport = ASGITransport(app=shop_app)
+    async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Add to cart",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }
+        response = await client.post("/api/ghost-cursor", json=payload)
+        assert response.status_code == 401
+        assert response.json()["detail"] == "login_required"
+
+
+@pytest.mark.asyncio
+async def test_query_param_user_id_ignored_without_session():
+    """Passing user_id in query params without session returns 401."""
+    shop_transport = ASGITransport(app=shop_app)
+    async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Add to cart",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }
+        response = await client.post("/api/ghost-cursor?user_id=someone", json=payload)
+        assert response.status_code == 401
+        assert response.json()["detail"] == "login_required"
+
+
+@pytest.mark.asyncio
+async def test_order_lookup_ownership_authorization(monkeypatch):
+    """
+    User cannot lookup orders belonging to other users:
+    User is logged in as 'demo' (user_demo), but queries SH-987 (owned by user_other).
+    Tool returns 'not found', synthesized reply confirms order not found.
+    """
+    orch_transport = ASGITransport(app=orch_app)
+    shop_transport = ASGITransport(app=shop_app)
+
+    async def mock_get_http_client(self):
+        return AsyncClient(transport=orch_transport, base_url="http://localhost:8080")
+
+    monkeypatch.setattr(ghost, "_get_http_client", mock_get_http_client.__get__(ghost, type(ghost)))
+
+    new_fixtures = {
+        "sh-987": {
+            "status": "awaiting_tools",
+            "reply": "Let me look up that order for you...",
+            "toolCalls": [
+                {"id": str(uuid.uuid4()), "tool": "lookup_order", "parameters": {"order_id": "SH-987"}},
+            ],
+        },
+        **MockVertexAIClient.FIXTURES,
+    }
+    monkeypatch.setattr(MockVertexAIClient, "FIXTURES", new_fixtures)
+
+    async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        login_res = await client.post("/api/login", json={"username": "demo"})
+        assert login_res.status_code == 200
+
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Where is order SH-987?",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }
+
+        response = await client.post("/api/ghost-cursor", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert "not found" in data["reply"].lower()
+
 

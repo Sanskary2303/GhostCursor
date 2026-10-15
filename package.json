@@ -13,6 +13,7 @@
     "dev:shophive:frontend": "npm run dev --workspace=demo/shophive/frontend",
     "dev:shophive:backend": "cd demo/shophive/backend && uvicorn main:app --reload --port 8081",
     "schemas": "npm run generate:schemas --workspace=packages/sdk-frontend",
+    "test:e2e": "playwright test -c e2e",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist demo/*/frontend/node_modules demo/*/frontend/dist services/orchestrator/venv"
   },
   "workspaces": [
@@ -35,9 +36,10 @@
   "author": "Ghost Cursor Team",
   "license": "MIT",
   "devDependencies": {
-    "typescript": "^5.5.4",
-    "vitest": "^2.0.5",
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.5.0",
     "eslint": "^9.9.0",
-    "@types/node": "^22.5.0"
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
   }
 }

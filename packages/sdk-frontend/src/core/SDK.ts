@@ -155,6 +155,12 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   // State
   let isDisposed = false;
   let currentRunId: string | null = null;
+  const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+  let lastStatus: string | null = null;
+  function rememberStatus(res: { runId: string; status: string }): void {
+    lastStatus = res.status;
+    currentRunId = TERMINAL_STATUSES.has(res.status) ? null : res.runId;
+  }
 
   // Render Preact ChatWidget into shadow root
   render(
@@ -164,18 +170,12 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       requireApprovalForActions,
       initialContext: { page: getPage(), values: {}, availableTargets: [] },
       onSendMessage: async (msg: string, ctx: any) => {
-        const pageContext = contextProvider.getContext() || {
-          page: getPage(),
-          values: {},
-          availableTargets: [],
-        };
-        if (!currentRunId) {
-          const res = await transportManager.start(msg, pageContext);
-          currentRunId = res.runId;
-          return res;
-        } else {
-          return await transportManager.continue('answer', { answer: msg });
-        }
+        const pageContext = contextProvider.getContext() || { page: getPage(), values: {}, availableTargets: [] };
+        const res = currentRunId && lastStatus === 'awaiting_answer'
+          ? await transportManager.continue('answer', { answer: msg })
+          : await transportManager.start(msg, pageContext);
+        rememberStatus(res);
+        return res;
       },
       onActionApproval: async (actions: any[]) => {
         await executeActions(actions);
@@ -196,7 +196,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   async function handleResponse(response: any): Promise<void> {
     if (isDisposed) return;
 
-    currentRunId = response.runId;
+    rememberStatus(response);
 
     // Handle different response types
     if (response.reply) {
@@ -261,13 +261,10 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       availableTargets: [],
     };
 
-    if (!currentRunId) {
-      // Start new run
-      await transportManager.start(message, pageContext);
-    } else {
-      // Continue existing run
-      await transportManager.continue('answer', { answer: message });
-    }
+    const res = currentRunId && lastStatus === 'awaiting_answer'
+      ? await transportManager.continue('answer', { answer: message })
+      : await transportManager.start(message, pageContext);
+    rememberStatus(res);
   }
 
   /**

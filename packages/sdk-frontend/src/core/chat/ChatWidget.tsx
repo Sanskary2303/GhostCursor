@@ -369,7 +369,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                 <textarea
                   ref={this.inputRef}
                   value={inputValue}
-                  onChange={this.handleInputChange}
+                  onInput={this.handleInputChange}
+                  onKeyDown={(e: KeyboardEvent) => {
+                    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.handleSendMessage(e); }
+                  }}
                   placeholder="Ask me anything..."
                   disabled={isLoading}
                   style={{

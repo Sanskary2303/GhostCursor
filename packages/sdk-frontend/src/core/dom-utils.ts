@@ -163,8 +163,6 @@ function resolveByAria(targetId: string): HTMLElement | null {
  * Level 5: Semantic Text & Visible Value Matching (fuzzy)
  */
 function resolveByText(targetId: string): HTMLElement | null {
-  const normalizedTarget = targetId.toLowerCase().trim();
-
   // Interactive elements to search
   const interactiveSelectors = [
     'button',
@@ -185,29 +183,16 @@ function resolveByText(targetId: string): HTMLElement | null {
     '[tabindex]:not([tabindex="-1"])',
   ];
 
-  const elements = document.querySelectorAll<HTMLElement>(interactiveSelectors.join(','));
-
-  for (const el of elements) {
-    // Skip sensitive elements
+  const wanted = targetId.toLowerCase().trim();
+  if (!wanted) return null;
+  const matches: HTMLElement[] = [];
+  for (const el of document.querySelectorAll<HTMLElement>(interactiveSelectors.join(','))) {
     if (isSensitiveElement(el)) continue;
-
-    // Get visible text
-    const text = el.textContent?.trim().toLowerCase() || '';
-    const value = (el as HTMLInputElement).value?.toLowerCase() || '';
-    const placeholder = (el as HTMLInputElement).placeholder?.toLowerCase() || '';
-    const ariaLabel = el.getAttribute('aria-label')?.toLowerCase() || '';
-    const title = el.getAttribute('title')?.toLowerCase() || '';
-
-    // Check all text sources
-    const sources = [text, value, placeholder, ariaLabel, title];
-    for (const source of sources) {
-      if (source === normalizedTarget || source.includes(normalizedTarget) || normalizedTarget.includes(source)) {
-        return el;
-      }
-    }
+    const sources = [el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')]
+      .map(s => (s ?? '').trim().toLowerCase()).filter(Boolean);
+    if (sources.includes(wanted)) matches.push(el);
   }
-
-  return null;
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
@@ -236,22 +221,12 @@ export async function resolveTargetWithCascade(
     { level: 5, name: 'text', fn: resolveByText },
   ];
 
-  for (const level of levels) {
-    // Poll for element with timeout
-    while (Date.now() - startTime < opts.timeout) {
+  while (Date.now() - startTime < opts.timeout) {
+    for (const level of levels) {
       const element = level.fn(targetId);
-
-      if (element && isInteractable(element, opts)) {
-        return {
-          element,
-          level: level.level,
-          selector: level.name,
-          matched: true,
-        };
-      }
-
-      await new Promise(resolve => setTimeout(resolve, opts.pollInterval));
+      if (element && isInteractable(element, opts)) return { element, level: level.level, selector: level.name, matched: true };
     }
+    await new Promise(resolve => setTimeout(resolve, opts.pollInterval));
   }
 
   // No element found after all levels and timeout

@@ -98,26 +98,25 @@ async function executeAction(
 async function executeNavigate(targetPage: string, options: Required<ExecutionOptions>): Promise<ToolResult> {
   options.onProgress(`navigate:${targetPage}`, 'executing');
 
-  // Try to find a navigation link with data-ghost-nav
-  const link = document.querySelector<HTMLElement>(`[data-ghost-nav="${targetPage}"]`);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(targetPage) || targetPage.startsWith('//')) {
+    return { id: crypto.randomUUID(), ok: false, error: 'blocked: only in-app pages are allowed' };
+  }
+
+  const path = '/' + targetPage.replace(/^\/+/, '');
+
+  const link = document.querySelector<HTMLElement>(`[data-ghost-nav="${CSS.escape(targetPage)}"], [data-ghost-nav="${CSS.escape(path)}"]`);
   if (link) {
     await animateCursorTo(link, options.onCursorMove);
     link.click();
-
-    // Wait for navigation to complete
-    await waitForNavigation(targetPage);
-
-    options.onProgress(`navigate:${targetPage}`, 'completed');
-    return { id: crypto.randomUUID(), ok: true, output: { navigated: targetPage } };
+  } else {
+    window.history.pushState({}, '', path);
+    window.dispatchEvent(new PopStateEvent('popstate'));
   }
 
-  // Fallback: push state for SPA
-  const path = targetPage.startsWith('/') ? targetPage : `/${targetPage}`;
-  window.history.pushState({}, '', path);
-  window.dispatchEvent(new PopStateEvent('popstate'));
-
-  // Wait for route to settle
-  await waitForNavigation(path);
+  const reached = await waitForNavigation(path);
+  if (!reached) {
+    return { id: crypto.randomUUID(), ok: false, error: `navigation did not reach ${path}` };
+  }
 
   options.onProgress(`navigate:${targetPage}`, 'completed');
   return { id: crypto.randomUUID(), ok: true, output: { navigated: path } };
@@ -309,34 +308,16 @@ async function executeAskClarification(question: string, options: string[], _opt
 /**
  * Waits for SPA navigation to complete
  */
-async function waitForNavigation(expectedPath: string): Promise<void> {
-  return new Promise(resolve => {
-    const timeout = setTimeout(resolve, 2000); // Max 2s wait
-
-    const checkNavigation = () => {
-      if (window.location.pathname === expectedPath || window.location.pathname.endsWith(expectedPath)) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    };
-
-    // Check immediately
-    checkNavigation();
-
-    // Listen for popstate (back/forward navigation)
-    window.addEventListener('popstate', checkNavigation, { once: true });
-
-    // Also check periodically for hash-based routing
-    const interval = setInterval(() => {
-      checkNavigation();
-    }, 100);
-
-    // Clean up
-    setTimeout(() => {
-      clearInterval(interval);
-      window.removeEventListener('popstate', checkNavigation);
-    }, 2000);
-  });
+async function waitForNavigation(expectedPath: string, timeoutMs = 3000): Promise<boolean> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (window.location.pathname === expectedPath) {
+      await new Promise(r => requestAnimationFrame(() => setTimeout(r, 100)));
+      return true;
+    }
+    await new Promise(r => setTimeout(r, 50));
+  }
+  return false;
 }
 
 /**

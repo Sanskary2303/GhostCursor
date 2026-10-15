@@ -327,3 +327,107 @@ async def test_deduplication_and_conflict(auth_headers):
         res3 = await client.post("/v1/runs", json=conflicting_payload, headers=auth_headers)
         assert res3.status_code == 409
 
+
+@pytest.mark.asyncio
+async def test_actions_have_unique_uuid_ids(auth_headers):
+    """Test that planned actions receive unique UUID IDs"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode please",
+        "context": {"page": "home", "values": {}, "availableTargets": ["theme.toggle"]},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "awaiting_actions"
+        actions = data["actions"]
+        assert len(actions) > 0
+
+        action_ids = []
+        for action in actions:
+            assert "id" in action
+            # Verify valid UUID string
+            val = uuid.UUID(action["id"])
+            assert str(val) == action["id"]
+            action_ids.append(action["id"])
+
+        # Check uniqueness across actions
+        assert len(set(action_ids)) == len(action_ids)
+
+
+@pytest.mark.asyncio
+async def test_runs_get_different_tool_call_ids(auth_headers):
+    """Test that two separate runs get different tool-call IDs"""
+    payload1 = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Where is my order SH-1024?",
+        "context": {"page": "orders", "values": {}, "availableTargets": []},
+    }
+    payload2 = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Where is my order SH-1024?",
+        "context": {"page": "orders", "values": {}, "availableTargets": []},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res1 = await client.post("/v1/runs", json=payload1, headers=auth_headers)
+        res2 = await client.post("/v1/runs", json=payload2, headers=auth_headers)
+
+        assert res1.status_code == 200
+        assert res2.status_code == 200
+
+        tc1 = res1.json()["toolCalls"]
+        tc2 = res2.json()["toolCalls"]
+
+        assert len(tc1) > 0
+        assert len(tc2) > 0
+        assert tc1[0]["id"] != tc2[0]["id"]
+
+
+@pytest.mark.asyncio
+async def test_actions_continuation_with_failure_returns_failed(auth_headers):
+    """Test that an action continuation with ok: false returns status == 'failed'"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode please",
+        "context": {"page": "home", "values": {}, "availableTargets": ["theme.toggle"]},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        run_id = data["runId"]
+        actions = data["actions"]
+
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": str(uuid.uuid4()),
+            "revision": 0,
+            "kind": "actions",
+            "results": [
+                {"id": actions[0]["id"], "ok": True, "output": {}},
+                {"id": actions[1]["id"], "ok": False, "error": "Switch element disabled"},
+            ],
+        }
+
+        cont_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json=continue_payload,
+            headers=auth_headers,
+        )
+        assert cont_res.status_code == 200
+        cont_data = cont_res.json()
+        assert cont_data["status"] == "failed"
+        assert "Switch element disabled" in cont_data["reply"]
+
+

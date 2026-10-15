@@ -7,6 +7,7 @@ Google ADK Agent Engine with Vertex AI Gemini 2.0 integration.
 from __future__ import annotations
 
 import os
+import uuid
 import logging
 from contextlib import asynccontextmanager
 from typing import List, Optional, Tuple
@@ -182,6 +183,17 @@ async def health_check():
     }
 
 
+def _register_pending(response: HostedRunResponse, run_state: RunState) -> None:
+    if response.actions:
+        for action in response.actions:
+            action["id"] = str(uuid.uuid4())
+        run_state.pending_ids = [a["id"] for a in response.actions]
+    elif response.toolCalls:
+        run_state.pending_ids = [tc.id for tc in response.toolCalls]
+    else:
+        run_state.pending_ids = []
+
+
 # ============================================================================
 # Hosted API Endpoints
 # ============================================================================
@@ -242,6 +254,7 @@ async def create_run(
         # Run initial planning
         run_state.revision = 0
         response = await _run_agent_turn(agent, run_state, request.message)
+        _register_pending(response, run_state)
         response.revision = 0
 
         # Update run state with response
@@ -305,6 +318,8 @@ async def continue_run(
                 raise HTTPException(status_code=409, detail="Event ID replay with different payload")
 
         # Process based on kind
+        run_state.latest_tool_results = []
+        run_state.latest_action_results = []
         target_revision = request.revision + 1
         run_state.revision = target_revision
         run_state.latest_kind = request.kind
@@ -319,6 +334,7 @@ async def continue_run(
         else:
             raise HTTPException(status_code=400, detail=f"Unknown kind: {request.kind}")
 
+        _register_pending(response, run_state)
         response.revision = target_revision
 
         # Update run state

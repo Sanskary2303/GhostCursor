@@ -34,6 +34,7 @@ class RunState:
     latest_tool_results: Optional[List[Any]] = None
     latest_action_results: Optional[List[Any]] = None
     latest_kind: Optional[str] = None
+    pending_ids: List[str] = field(default_factory=list)
     history: List[Dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
@@ -114,6 +115,7 @@ class RunState:
             "latest_reply": self.latest_reply,
             "latest_event_id": self.latest_event_id,
             "latest_event_digest": self.latest_event_digest,
+            "pending_ids": self.pending_ids,
             "history": self.history,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
@@ -135,6 +137,7 @@ class RunState:
             latest_reply=data.get("latest_reply", ""),
             latest_event_id=data.get("latest_event_id"),
             latest_event_digest=data.get("latest_event_digest"),
+            pending_ids=data.get("pending_ids", []),
             history=data.get("history", []),
             created_at=datetime.fromisoformat(data["created_at"]) if isinstance(data.get("created_at"), str) else data.get("created_at", datetime.now(timezone.utc)),
             expires_at=datetime.fromisoformat(data["expires_at"]) if isinstance(data.get("expires_at"), str) else data.get("expires_at", datetime.now(timezone.utc) + timedelta(seconds=RUN_EXPIRY_SECONDS)),

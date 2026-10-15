@@ -4,6 +4,7 @@ Vertex AI / Gemini 2.0 Client
 Provides both real Vertex AI and mock client for local testing.
 """
 
+import copy
 import json
 import logging
 import uuid
@@ -401,12 +402,29 @@ class MockVertexAIClient(BaseVertexClient):
 
         # Handle action results continuation
         if kind == "actions" or action_results:
+            failed_result = next((
+                r for r in action_results
+                if (r.get("ok") is False if isinstance(r, dict) else getattr(r, "ok", None) is False)
+            ), None)
+            if failed_result:
+                first_error = (
+                    failed_result.get("error")
+                    if isinstance(failed_result, dict)
+                    else getattr(failed_result, "error", None)
+                ) or "action failed"
+                return HostedRunResponse(
+                    protocolVersion="1",
+                    runId=run_id,
+                    revision=revision,
+                    status="failed",
+                    reply=f"I couldn't finish: {first_error}. Steps done before it were kept.",
+                )
             return HostedRunResponse(
                 protocolVersion="1",
                 runId=run_id,
                 revision=revision,
                 status="completed",
-                reply="Actions executed successfully on your screen. The changes are now active!",
+                reply="All steps executed successfully on your screen.",
             )
 
         # Handle clarification answer continuation
@@ -428,7 +446,7 @@ class MockVertexAIClient(BaseVertexClient):
                     protocolVersion="1",
                     runId=run_id,
                     revision=revision,
-                    **fixture,
+                    **copy.deepcopy(fixture),
                 )
 
                 # Convert question dicts to ClarifyQuestion objects
@@ -440,7 +458,7 @@ class MockVertexAIClient(BaseVertexClient):
                 # Convert toolCall dicts to ToolCallRequest objects
                 if fixture.get("toolCalls"):
                     response.toolCalls = [
-                        ToolCallRequest(**tc) for tc in fixture["toolCalls"]
+                        ToolCallRequest(**{**tc, "id": str(uuid.uuid4())}) for tc in fixture["toolCalls"]
                     ]
 
                 return response

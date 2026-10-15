@@ -52,6 +52,46 @@ async def test_brain_loader(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_brain_loader_page_id_allowlist_and_size_cap(tmp_path):
+    """Test page ID allowlist, rejection of path traversal, and 32,000 char size cap"""
+    brain_dir = tmp_path / "brain"
+    brain_dir.mkdir()
+    pages_dir = brain_dir / "pages"
+    pages_dir.mkdir()
+
+    (brain_dir / "platform.md").write_text("# Global Platform Content")
+    (pages_dir / "products.md").write_text("# Products Page Content")
+    (pages_dir / "air-max-90.md").write_text("# Air Max Content")
+    (pages_dir / "platform.md").write_text("# Traversal Fake Content")
+
+    loader = BrainLoader(str(brain_dir))
+
+    # load_context("products") includes the products page
+    products_context = loader.load_context("products")
+    assert "Global Platform Content" in products_context
+    assert "Products Page Content" in products_context
+
+    # load_context("product/air-max-90") and load_context("../platform") include only platform content
+    slash_context = loader.load_context("product/air-max-90")
+    assert "Global Platform Content" in slash_context
+    assert "Air Max Content" not in slash_context
+    assert "CURRENT PAGE CONTEXT" not in slash_context
+
+    traversal_context = loader.load_context("../platform")
+    assert "Global Platform Content" in traversal_context
+    assert "Traversal Fake Content" not in traversal_context
+    assert "CURRENT PAGE CONTEXT" not in traversal_context
+
+    # A 40,000-character page file is cut to 32,000
+    huge_text = "A" * 40000
+    (pages_dir / "huge.md").write_text(huge_text)
+    huge_context = loader.load_context("huge")
+    assert len(huge_context) == 32000
+    assert "### GLOBAL PLATFORM CONTEXT" in huge_context
+    assert "### CURRENT PAGE CONTEXT (huge)" in huge_context
+
+
+@pytest.mark.asyncio
 async def test_backend_tool_execution_with_pydantic_coercion():
     """Test BackendTool handles Pydantic model parameter coercion and async execution"""
     async def sample_handler(params: SampleQuery, context: dict):

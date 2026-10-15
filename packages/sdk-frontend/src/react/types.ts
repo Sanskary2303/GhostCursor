@@ -5,7 +5,7 @@ export interface GhostCursorProps {
   onMessage?: (event: MessageEvent) => void;
   onActionsRequested?: (actions: any) => void;
   context?: {
-    page?: string;
+    page?: string | (() => string);
     values?: Record<string, string | number | boolean>;
     availableTargets?: string[];
     [key: string]: any;

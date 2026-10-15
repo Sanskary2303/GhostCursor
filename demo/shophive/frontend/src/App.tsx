@@ -12,6 +12,12 @@ import { Settings } from './pages/Settings';
 // [GHOST-CURSOR INTEGRATION - STEP 1: IMPORT SDK COMPONENT]
 import { GhostCursor } from '@ghost-cursor/sdk';
 
+const ROUTE_PAGES: Record<string, string> = { '/': 'home', '/cart': 'cart', '/checkout': 'checkout', '/orders': 'orders', '/settings': 'settings' };
+const ghostContext = {
+  page: () => (window.location.pathname.startsWith('/product/') ? 'products' : ROUTE_PAGES[window.location.pathname] ?? 'home'),
+};
+const ghostTheme = { primaryColor: '#0052FF', cursorColor: '#FF4D4D', position: 'bottom-right' as const };
+
 export function App() {
   return (
     <BrowserRouter>
@@ -33,11 +39,8 @@ export function App() {
           {/* [GHOST-CURSOR INTEGRATION - STEP 2: MOUNT WIDGET WITH ENDPOINT & CONFIG] */}
           <GhostCursor
             apiEndpoint="/api/ghost-cursor"
-            theme={{
-              primaryColor: '#0052FF',
-              cursorColor: '#FF4D4D',
-              position: 'bottom-right',
-            }}
+            theme={ghostTheme}
+            context={ghostContext}
             requireApprovalForActions={true}
           />
         </div>

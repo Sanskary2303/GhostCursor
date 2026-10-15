@@ -95,7 +95,7 @@ async def test_create_run_awaiting_actions(auth_headers):
         assert data["status"] == "awaiting_actions"
         assert data["revision"] == 0
         assert len(data["actions"]) > 0
-        assert any(a["type"] == "toggle_switch" for a in data["actions"])
+        assert any(a.get("target_id") == "theme.dark" for a in data["actions"])
 
 
 @pytest.mark.asyncio
@@ -258,8 +258,9 @@ async def test_continue_with_user_answer(auth_headers):
         )
         assert cont_res.status_code == 200
         cont_data = cont_res.json()
-        assert cont_data["status"] == "completed"
-        assert "123 Main St, NYC" in cont_data["reply"]
+        assert cont_data["status"] == "awaiting_actions"
+        assert len(cont_data["actions"]) > 0
+        assert "saved address" in cont_data["reply"]
 
 
 @pytest.mark.asyncio

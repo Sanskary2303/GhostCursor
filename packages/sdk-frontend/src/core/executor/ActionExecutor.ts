@@ -65,7 +65,7 @@ async function executeAction(
         return await executeFillInput(target_id!, value!, options);
 
       case 'select_option':
-        return await executeSelectOption(target_id!, value!, options);
+        return await executeSelectOption(target_id!, action.option ?? value!, options);
 
       case 'toggle_switch':
         return await executeToggleSwitch(target_id!, state!, options);

@@ -280,6 +280,17 @@ class VertexAIClient(BaseVertexClient):
         self._client = None
 
 
+CHECKOUT_FILL_ACTIONS = [
+    {"type": "navigate", "target_page": "checkout", "explanation": "Navigate to checkout page"},
+    {"type": "fill_input", "target_id": "checkout.first_name", "value": "John", "explanation": "Enter first name"},
+    {"type": "fill_input", "target_id": "checkout.last_name", "value": "Doe", "explanation": "Enter last name"},
+    {"type": "fill_input", "target_id": "checkout.address", "value": "123 Main St", "explanation": "Enter street address"},
+    {"type": "fill_input", "target_id": "checkout.city", "value": "New York", "explanation": "Enter city"},
+    {"type": "select_option", "target_id": "checkout.state", "option": "NY", "explanation": "Select state"},
+    {"type": "fill_input", "target_id": "checkout.zip", "value": "10001", "explanation": "Enter ZIP code"},
+]
+
+
 class MockVertexAIClient(BaseVertexClient):
     """
     Mock Vertex AI client for local testing without GCP credentials.
@@ -293,7 +304,7 @@ class MockVertexAIClient(BaseVertexClient):
             "reply": "I'll switch the theme to dark mode for you. Here's my plan:",
             "actions": [
                 {"type": "navigate", "target_page": "settings", "explanation": "Navigate to settings page where theme controls are located"},
-                {"type": "toggle_switch", "target_id": "theme.toggle", "state": True, "explanation": "Toggle the dark mode switch on"},
+                {"type": "click", "target_id": "theme.dark", "explanation": "Select dark theme"},
             ],
         },
         "add to cart": {
@@ -308,7 +319,7 @@ class MockVertexAIClient(BaseVertexClient):
             "status": "awaiting_actions",
             "reply": "I'll navigate to the Air Max 90 product and add it to your cart:",
             "actions": [
-                {"type": "navigate", "target_page": "products/air-max-90", "explanation": "Navigate to the Air Max 90 product page"},
+                {"type": "navigate", "target_page": "product/air-max-90", "explanation": "Navigate to the Air Max 90 product page"},
                 {"type": "click", "target_id": "product.size.10", "explanation": "Select size 10"},
                 {"type": "click", "target_id": "product.add_to_cart_btn", "explanation": "Add the Air Max 90 to your cart"},
             ],
@@ -324,10 +335,11 @@ class MockVertexAIClient(BaseVertexClient):
             "status": "awaiting_actions",
             "reply": "Let me show you how to track your order with a guided tour:",
             "actions": [
-                {"type": "guided_tour", "steps": [
-                    {"target_id": "nav.orders", "message": "First, click on 'My Orders' in the navigation", "spotlight": True},
-                    {"target_id": "orders.recent_item", "message": "Here's your most recent order with its current status", "spotlight": True},
-                    {"target_id": "orders.tracking_link", "message": "Click this link to see real-time tracking from the carrier", "spotlight": True},
+                {"type": "navigate", "target_page": "orders", "explanation": "Navigate to orders page"},
+                {"type": "guided_tour", "explanation": "Take a guided tour of order tracking", "steps": [
+                    {"target_id": "orders.order.SH-1024", "message": "Here is your order SH-1024", "spotlight": True},
+                    {"target_id": "orders.SH-1024.status", "message": "Check the delivery status here", "spotlight": True},
+                    {"target_id": "orders.SH-1024.track", "message": "Click track to see carrier updates", "spotlight": True},
                 ]},
             ],
         },
@@ -348,6 +360,13 @@ class MockVertexAIClient(BaseVertexClient):
         "sizes": {
             "status": "completed",
             "reply": "Based on what I can see on the product page, the Air Max 90 is available in US Men's sizes 7 through 13. Size 10 is currently in stock with 15 units available. Would you like me to add a specific size to your cart?",
+        },
+        "margin": {
+            "status": "awaiting_tools",
+            "reply": "Let me simulate the discount ROI for promo code SAVE20...",
+            "toolCalls": [
+                {"id": str(uuid.uuid4()), "tool": "simulate_discount_roi", "parameters": {"promo_code": "SAVE20", "subtotal": 129.99}},
+            ],
         },
         "what": {
             "status": "completed",
@@ -382,7 +401,13 @@ class MockVertexAIClient(BaseVertexClient):
                         )
                     elif "sku" in out:
                         reply_lines.append(
-                            f"Inventory check for SKU {out.get('sku')} (size {out.get('size')}): {out.get('available_quantity', 20)} units currently in stock."
+                            f"Inventory check for SKU {out.get('sku')} (size {out.get('size')}): {out.get('available_units')} units currently in stock."
+                        )
+                    elif "projected_margin_percent" in out:
+                        reply_lines.append(
+                            f"With a {out.get('discount_percent')}% discount, your margin moves from {out.get('current_margin_percent')}% "
+                            f"to {out.get('projected_margin_percent')}%. You need a {out.get('break_even_increase_percent')}% "
+                            f"increase in sales volume to break even."
                         )
                     elif "error" in out:
                         reply_lines.append(f"Backend tool returned: {out.get('error')}")
@@ -429,6 +454,15 @@ class MockVertexAIClient(BaseVertexClient):
 
         # Handle clarification answer continuation
         if kind == "answer":
+            if "main st" in user_message.lower():
+                return HostedRunResponse(
+                    protocolVersion="1",
+                    runId=run_id,
+                    revision=revision,
+                    status="awaiting_actions",
+                    reply="I'll fill the checkout form with your saved address:",
+                    actions=copy.deepcopy(CHECKOUT_FILL_ACTIONS),
+                )
             return HostedRunResponse(
                 protocolVersion="1",
                 runId=run_id,

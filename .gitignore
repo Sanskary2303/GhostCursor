@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+.next/
+out/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+venv-*/
+.env
+.env.local
+.env.*.local
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+pytest-debug.log
+.mypy_cache/
+.dmypy.json
+dmypy.json
+*.egg-info/
+dist/
+build/
+
+# IDE/Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+*.log
+*.log.*
+
+# Testing
+coverage/
+.nyc_output/
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Docker
+.docker/
+
+# Terraform
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform/
+
+# Secrets - never commit
+*.pem
+*.key
+*.crt
+secrets/
+*.env.secret
+
+# OS
+Thumbs.db
+ehthumbs.db
+Desktop.ini

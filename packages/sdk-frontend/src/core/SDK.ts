@@ -30,6 +30,7 @@ export interface CreateGhostCursorOptions {
     position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
   };
   requireApprovalForActions?: boolean;
+  transport?: 'http' | 'websocket';
   onMessage?: (message: Message) => void;
   onActionsRequested?: (actions: Action[]) => void;
   onContextChange?: (context: PageContext) => void;
@@ -107,7 +108,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     onError: (error) => console.error('[GhostCursor] Transport error:', error),
     onClose: () => console.log('[GhostCursor] Connection closed'),
     reconnect: true,
-  });
+  }, options.transport ?? 'http');
 
   const transportManager = new TransportManager(transport);
 

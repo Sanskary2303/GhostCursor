@@ -79,8 +79,11 @@ export class WebSocketTransport implements Transport {
       } else if (wsUrl.startsWith('https://')) {
         wsUrl = wsUrl.replace(/^https:\/\//, 'wss://');
       } else if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
-        const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const host = typeof window !== 'undefined' && window.location.host ? window.location.host : '127.0.0.1:8081';
+        if (typeof window === 'undefined' || !window.location.host) {
+          throw new Error('WebSocket transport needs a browser');
+        }
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host;
         wsUrl = `${protocol}//${host}${wsUrl.startsWith('/') ? '' : '/'}${wsUrl}`;
       }
 
@@ -268,20 +271,7 @@ export class HttpTransport implements Transport {
     }
   }
 
-  async connect(): Promise<void> {
-    try {
-      const response = await fetch(this.options.gatewayUrl, {
-        method: 'OPTIONS',
-        headers: await this.options.headers(),
-      });
-      if (!response.ok && response.status !== 405) {
-        throw new Error(`Gateway unavailable: ${response.status}`);
-      }
-      this.emit('open', { type: 'open' });
-    } catch (error) {
-      throw new Error(`Failed to connect to gateway: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
-  }
+  async connect(): Promise<void> { this.emit('open', { type: 'open' }); }
 
   async send(request: BrowserRequest): Promise<void> {
     if (this.isClosed) {
@@ -300,8 +290,9 @@ export class HttpTransport implements Transport {
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
+        let code = `HTTP ${response.status}`;
+        try { const body = await response.json(); if (typeof body?.error === 'string') code = body.error; } catch { /* not JSON */ }
+        throw new Error(code);
       }
 
       const data = await response.json() as PublicResponse;
@@ -327,14 +318,8 @@ export class HttpTransport implements Transport {
 /**
  * Factory function to create the appropriate transport
  */
-export function createTransport(options: TransportOptions): Transport {
-  // Check if WebSocket is supported
-  if (typeof WebSocket !== 'undefined') {
-    return new WebSocketTransport(options);
-  }
-
-  // Fallback to HTTP
-  return new HttpTransport(options);
+export function createTransport(options: TransportOptions, kind: 'http' | 'websocket' = 'http'): Transport {
+  return kind === 'websocket' ? new WebSocketTransport(options) : new HttpTransport(options);
 }
 
 /**
@@ -410,7 +395,7 @@ export class TransportManager {
       }, 30000);
 
       const off = this.transport.on('message', (event) => {
-        if (event.data.runId === this.runId && event.data.revision === this.revision + 1) {
+        if (event.data.runId === this.runId && event.data.revision > this.revision) {
           this.revision = event.data.revision;
           clearTimeout(timeout);
           off();

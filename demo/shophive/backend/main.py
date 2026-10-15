@@ -108,7 +108,7 @@ async def get_product(product_id: str):
 # Ghost Cursor Integration
 # ============================================================================
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter
 
 ghost_router = APIRouter(prefix="/api/ghost-cursor", tags=["ghost-cursor"])
 
@@ -119,25 +119,6 @@ async def handle_ghost_turn(request: Request, user_id: str = "anonymous"):
     """Handle Ghost Cursor conversation turns"""
     payload = await request.json()
     return await ghost.handle_turn(payload=payload, user_id=user_id)
-
-@ghost_router.websocket("")
-@ghost_router.websocket("/")
-@ghost_router.websocket("/ws")
-async def handle_ghost_ws(websocket: WebSocket, user_id: str = "anonymous"):
-    """WebSocket connection for real-time cursor interaction"""
-    await websocket.accept()
-    try:
-        while True:
-            data = await websocket.receive_json()
-            response = await ghost.handle_turn(payload=data, user_id=user_id)
-            await websocket.send_json(response)
-    except WebSocketDisconnect:
-        pass
-    except Exception as e:
-        try:
-            await websocket.send_json({"error": str(e), "status": "failed"})
-        except Exception:
-            pass
 
 @ghost_router.get("/sessions")
 async def list_sessions(user_id: str = "anonymous"):

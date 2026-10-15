@@ -20,21 +20,19 @@ if [ ! -f "$VENV_PYTHON" ]; then
     .venv/bin/pip install -r demo/shophive/backend/requirements.txt
 fi
 
-# Build Frontend SDK if needed
-if [ ! -f "packages/sdk-frontend/dist/ghost-cursor.es.js" ]; then
-    echo "📦 Building Frontend SDK..."
-    npm run build --workspace=packages/sdk-frontend
-fi
+if [ ! -d node_modules ]; then npm ci; fi
 
-# Build ShopHive Frontend if needed
-if [ ! -f "demo/shophive/frontend/dist/index.html" ]; then
-    echo "📦 Building ShopHive Storefront Frontend..."
-    npm run build --workspace=demo/shophive/frontend
-fi
+# Build Frontend SDK
+echo "📦 Building Frontend SDK..."
+npm run build --workspace=packages/sdk-frontend
 
-# Kill any existing processes on 8080 or 8081
-fuser -k 8080/tcp 2>/dev/null || true
-fuser -k 8081/tcp 2>/dev/null || true
+# Build ShopHive Frontend
+echo "📦 Building ShopHive Storefront Frontend..."
+npm run build --workspace=demo/shophive/frontend
+
+for port in 8080 8081; do
+  if (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then echo "Port $port is in use; stop that process first."; exit 1; fi
+done
 
 export USE_MOCK_LLM="${USE_MOCK_LLM:-true}"
 export GHOST_CURSOR_API_KEY="${GHOST_CURSOR_API_KEY:-test-key-shophive-demo}"

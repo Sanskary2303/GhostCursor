@@ -33,7 +33,7 @@ from tools.ghost_tools import register_shophive_tools
 
 GHOST_CURSOR_API_KEY = os.getenv("GHOST_CURSOR_API_KEY", "test-key-shophive-demo")
 GHOST_CURSOR_TENANT_ID = os.getenv("GHOST_CURSOR_TENANT_ID", "shophive_demo")
-GHOST_CURSOR_BRAIN_DIR = os.getenv("GHOST_CURSOR_BRAIN_DIR", "./brain")
+GHOST_CURSOR_BRAIN_DIR = os.getenv("GHOST_CURSOR_BRAIN_DIR", str(backend_dir / "brain"))
 GHOST_CURSOR_SERVICE_URL = os.getenv("GHOST_CURSOR_SERVICE_URL", "http://localhost:8080")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./shophive.db")
@@ -144,20 +144,22 @@ app.include_router(ghost_router)
 # Static Files (Frontend)
 # ============================================================================
 
+from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-frontend_dir = Path(__file__).parent.parent / "frontend" / "dist"
+frontend_dir = (backend_dir.parent / "frontend" / "dist").resolve()
 if frontend_dir.exists():
-    app.mount("/", StaticFiles(directory=frontend_dir, html=True), name="frontend")
+    app.mount("/assets", StaticFiles(directory=frontend_dir / "assets"), name="assets")
 
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        index_path = frontend_dir / "index.html"
-        if index_path.exists():
-            return FileResponse(index_path)
-        from fastapi import HTTPException
+@app.get("/{full_path:path}", include_in_schema=False)
+async def serve_frontend(full_path: str):
+    if full_path.startswith("api/"):
         raise HTTPException(status_code=404)
+    candidate = (frontend_dir / full_path).resolve()
+    if full_path and candidate.is_file() and candidate.is_relative_to(frontend_dir):
+        return FileResponse(candidate)
+    return FileResponse(frontend_dir / "index.html")
 
 # ============================================================================
 # Main Entry Point

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useCart } from '../cart/CartContext';
 
 const PRODUCTS_DATA: Record<string, any> = {
   'air-max-90': {
@@ -44,20 +45,21 @@ const PRODUCTS_DATA: Record<string, any> = {
 export function ProductDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const cart = useCart();
   const [selectedSize, setSelectedSize] = useState<string | null>(null);
   const [selectedColor, setSelectedColor] = useState<string>('');
   const [quantity, setQuantity] = useState(1);
-  const [cartCount, setCartCount] = useState(0);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const product = PRODUCTS_DATA[id || ''] || PRODUCTS_DATA['air-max-90'];
 
   const handleAddToCart = () => {
     if (!selectedSize) {
-      alert('Please select a size');
+      setNotice('Please select a size first.');
       return;
     }
-    setCartCount(cartCount + quantity);
-    alert(`Added ${product.name} (Size ${selectedSize}) to cart!`);
+    cart.add({ productId: product.id, name: product.name, price: product.price, size: selectedSize, quantity });
+    setNotice(`Added ${product.name} (Size ${selectedSize}) to cart.`);
   };
 
   return (
@@ -179,15 +181,25 @@ export function ProductDetail() {
           </div>
 
           {/* Cart notification */}
-          {cartCount > 0 && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-green-800">
-              ✅ {cartCount} item(s) in your cart!{' '}
-              <button
-                onClick={() => navigate('/cart')}
-                className="underline font-medium hover:text-green-900"
-              >
-                View Cart
-              </button>
+          {notice && (
+            <div
+              role="status"
+              data-ghost-id="product.cart_notice"
+              className={`border rounded-lg p-4 ${
+                notice.includes('Please')
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-green-50 border-green-200 text-green-800'
+              }`}
+            >
+              {notice}{' '}
+              {!notice.includes('Please') && (
+                <button
+                  onClick={() => navigate('/cart')}
+                  className="underline font-medium hover:text-green-900 ml-2"
+                >
+                  View Cart
+                </button>
+              )}
             </div>
           )}
 

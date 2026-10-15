@@ -1,22 +1,29 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-
-const CART_ITEMS = [
-  {
-    id: 1,
-    product: { id: 'air-max-90', name: 'Nike Air Max 90', price: 129.99, image: '🟦' },
-    size: '10',
-    quantity: 1,
-  },
-];
+import { useCart } from '../cart/CartContext';
 
 export function Cart() {
   const navigate = useNavigate();
-  const items = CART_ITEMS;
-  const subtotal = items.reduce((sum, item) => sum + item.product.price * item.quantity, 0);
+  const { items, subtotal, remove } = useCart();
+  const [promoCode, setPromoCode] = useState('');
+  const [appliedPromo, setAppliedPromo] = useState<string | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+
+  const handleApplyPromo = () => {
+    if (promoCode.trim().toUpperCase() === 'SAVE20') {
+      setAppliedPromo('SAVE20');
+      setPromoError(null);
+    } else {
+      setAppliedPromo(null);
+      setPromoError('Unknown code');
+    }
+  };
+
+  const discount = appliedPromo === 'SAVE20' ? subtotal * 0.2 : 0;
+  const discountedSubtotal = subtotal - discount;
   const shipping = subtotal > 75 ? 0 : 8.99;
-  const tax = subtotal * 0.08;
-  const total = subtotal + shipping + tax;
+  const tax = discountedSubtotal * 0.08;
+  const total = (subtotal - discount) + shipping + tax;
 
   if (items.length === 0) {
     return (
@@ -43,26 +50,30 @@ export function Cart() {
         <div className="lg:col-span-2 space-y-4">
           {items.map((item) => (
             <div
-              key={item.id}
+              key={`${item.productId}-${item.size}`}
               className="bg-white rounded-xl border border-gray-200 p-4 flex items-center space-x-4"
             >
               <div className="w-24 h-24 bg-gray-100 rounded-lg flex items-center justify-center text-3xl">
-                {item.product.image}
+                {item.productId === 'air-max-90' ? '🟦' : item.productId === 'jordan-1' ? '🟥' : '👟'}
               </div>
               <div className="flex-1">
-                <h3 data-ghost-id={`cart.item.${item.id}.title`} className="font-semibold">
-                  {item.product.name}
+                <h3 data-ghost-id={`cart.item.${item.productId}.title`} className="font-semibold">
+                  {item.name}
                 </h3>
                 <p className="text-sm text-gray-600">Size: US {item.size}</p>
                 <div className="flex items-center space-x-4 mt-2">
                   <span>Qty: {item.quantity}</span>
-                  <button className="text-sm text-blue-600 hover:underline">Edit</button>
-                  <button className="text-sm text-red-600 hover:underline">Remove</button>
+                  <button
+                    onClick={() => remove(item.productId, item.size)}
+                    className="text-sm text-red-600 hover:underline"
+                  >
+                    Remove
+                  </button>
                 </div>
               </div>
               <div className="text-right">
-                <p data-ghost-id={`cart.item.${item.id}.price`} className="font-bold text-lg">
-                  ${(item.product.price * item.quantity).toFixed(2)}
+                <p data-ghost-id={`cart.item.${item.productId}.price`} className="font-bold text-lg">
+                  ${(item.price * item.quantity).toFixed(2)}
                 </p>
               </div>
             </div>
@@ -80,6 +91,14 @@ export function Cart() {
                 ${subtotal.toFixed(2)}
               </span>
             </div>
+            {discount > 0 && (
+              <div className="flex justify-between text-green-600">
+                <span>Discount</span>
+                <span data-ghost-id="cart.discount" className="font-medium">
+                  -${discount.toFixed(2)}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between">
               <span className="text-gray-600">Shipping</span>
               <span data-ghost-id="cart.shipping">
@@ -102,6 +121,32 @@ export function Cart() {
             <div className="border-t pt-3 flex justify-between text-lg font-bold">
               <span>Total</span>
               <span data-ghost-id="cart.total">${total.toFixed(2)}</span>
+            </div>
+
+            {/* Promo Code Input */}
+            <div className="pt-4 border-t">
+              <label className="block text-xs font-medium text-gray-700 mb-1">Promo Code</label>
+              <div className="flex space-x-2">
+                <input
+                  type="text"
+                  data-ghost-id="cart.promo_code"
+                  value={promoCode}
+                  onChange={(e) => setPromoCode(e.target.value)}
+                  placeholder="Promo code"
+                  className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  data-ghost-id="cart.apply_promo"
+                  onClick={handleApplyPromo}
+                  className="bg-gray-800 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 transition-colors"
+                >
+                  Apply
+                </button>
+              </div>
+              {promoError && (
+                <p className="text-xs text-red-600 mt-1">{promoError}</p>
+              )}
             </div>
           </div>
 

@@ -1,8 +1,10 @@
 import React from 'react';
 import { Link, useLocation } from 'react-router-dom';
+import { useCart } from '../cart/CartContext';
 
 export function NavigationHeader() {
   const location = useLocation();
+  const { count } = useCart();
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -38,7 +40,7 @@ export function NavigationHeader() {
                 isActive('/cart') ? 'text-blue-600' : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              Cart (0)
+              Cart ({count})
             </Link>
             <Link
               to="/orders"

@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useCart } from '../cart/CartContext';
 
 export function Checkout() {
   const navigate = useNavigate();
+  const cart = useCart();
   const [formData, setFormData] = useState({
     email: '',
     firstName: '',
@@ -20,13 +22,18 @@ export function Checkout() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    alert('Order placed successfully! Thank you for shopping with ShopHive.');
+    cart.clear();
     navigate('/orders');
   };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
+
+  const subtotal = cart.subtotal;
+  const shipping = subtotal > 75 || subtotal === 0 ? 0 : 8.99;
+  const tax = subtotal * 0.08;
+  const total = subtotal + shipping + tax;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -248,22 +255,32 @@ export function Checkout() {
         <div className="bg-white rounded-xl border border-gray-200 p-6 h-fit">
           <h2 className="text-xl font-bold mb-4">Order Summary</h2>
           <div className="space-y-3 text-sm border-b pb-4">
-            <div className="flex justify-between">
-              <span>Air Max 90 (Size 10) × 1</span>
-              <span>$129.99</span>
-            </div>
+            {cart.items.length === 0 ? (
+              <p className="text-gray-500">Your cart is empty.</p>
+            ) : (
+              cart.items.map((item) => (
+                <div key={`${item.productId}-${item.size}`} className="flex justify-between">
+                  <span>
+                    {item.name} (Size {item.size}) × {item.quantity}
+                  </span>
+                  <span>${(item.price * item.quantity).toFixed(2)}</span>
+                </div>
+              ))
+            )}
             <div className="flex justify-between text-gray-600">
               <span>Shipping</span>
-              <span className="text-green-600">Free</span>
+              <span className={shipping === 0 ? "text-green-600" : ""}>
+                {shipping === 0 ? "Free" : `$${shipping.toFixed(2)}`}
+              </span>
             </div>
             <div className="flex justify-between text-gray-600">
               <span>Tax</span>
-              <span>$10.40</span>
+              <span>${tax.toFixed(2)}</span>
             </div>
           </div>
           <div className="flex justify-between pt-4 text-lg font-bold">
             <span>Total</span>
-            <span data-ghost-id="checkout.total">$140.39</span>
+            <span data-ghost-id="checkout.total">${total.toFixed(2)}</span>
           </div>
 
           <button

@@ -21,6 +21,8 @@ export interface Transport {
   send(request: BrowserRequest): Promise<void>;
   close(): void;
   isConnected(): boolean;
+  on(type: TransportEventType, listener: (event: TransportEvent) => void): () => void;
+  off?(type: TransportEventType, listener: (event: TransportEvent) => void): void;
 }
 
 export type TransportEventType = 'open' | 'close' | 'error' | 'message';
@@ -71,14 +73,23 @@ export class WebSocketTransport implements Transport {
 
     try {
       // Convert HTTP URL to WebSocket URL
-      const wsUrl = this.options.gatewayUrl.replace(/^http/, 'ws');
+      let wsUrl = this.options.gatewayUrl;
+      if (wsUrl.startsWith('http://')) {
+        wsUrl = wsUrl.replace(/^http:\/\//, 'ws://');
+      } else if (wsUrl.startsWith('https://')) {
+        wsUrl = wsUrl.replace(/^https:\/\//, 'wss://');
+      } else if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+        const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = typeof window !== 'undefined' && window.location.host ? window.location.host : '127.0.0.1:8081';
+        wsUrl = `${protocol}//${host}${wsUrl.startsWith('/') ? '' : '/'}${wsUrl}`;
+      }
 
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = async () => {
         this.isConnecting = false;
         this.reconnectAttempts = 0;
-        this.emit('open', {});
+        this.emit('open', { type: 'open' });
 
         // Send queued messages
         for (const msg of this.messageQueue) {
@@ -90,24 +101,24 @@ export class WebSocketTransport implements Transport {
       this.ws.onmessage = async (event) => {
         try {
           const response = JSON.parse(event.data) as PublicResponse;
-          this.emit('message', { data: response });
+          this.emit('message', { type: 'message', data: response });
           this.options.onMessage(response);
         } catch (error) {
           console.error('[WebSocketTransport] Failed to parse message:', error);
-          this.emit('error', { error: error as Error });
+          this.emit('error', { type: 'error', error: error as Error });
         }
       };
 
       this.ws.onerror = (event) => {
         this.isConnecting = false;
         const error = new Error('WebSocket error');
-        this.emit('error', { error });
+        this.emit('error', { type: 'error', error });
         this.options.onError(error);
       };
 
       this.ws.onclose = () => {
         this.isConnecting = false;
-        this.emit('close', {});
+        this.emit('close', { type: 'close' });
         this.options.onClose();
 
         if (this.options.reconnect && !this.isClosed && this.reconnectAttempts < this.options.maxReconnectAttempts) {
@@ -210,6 +221,8 @@ export class HttpTransport implements Transport {
   private options: Required<TransportOptions>;
   private isClosed = false;
 
+  private eventListeners: Map<TransportEventType, Set<(event: TransportEvent) => void>> = new Map();
+
   constructor(options: TransportOptions) {
     this.options = {
       gatewayUrl: options.gatewayUrl,
@@ -221,11 +234,41 @@ export class HttpTransport implements Transport {
       reconnectInterval: 0,
       maxReconnectAttempts: 0,
     };
+
+    for (const type of ['open', 'close', 'error', 'message'] as TransportEventType[]) {
+      this.eventListeners.set(type, new Set());
+    }
+  }
+
+  on(type: TransportEventType, listener: (event: TransportEvent) => void): () => void {
+    const listeners = this.eventListeners.get(type);
+    if (listeners) {
+      listeners.add(listener);
+    }
+    return () => this.off(type, listener);
+  }
+
+  off(type: TransportEventType, listener: (event: TransportEvent) => void): void {
+    const listeners = this.eventListeners.get(type);
+    if (listeners) {
+      listeners.delete(listener);
+    }
+  }
+
+  private emit(type: TransportEventType, event: TransportEvent): void {
+    const listeners = this.eventListeners.get(type);
+    if (listeners) {
+      for (const listener of listeners) {
+        try {
+          listener(event);
+        } catch (error) {
+          console.error(`[HttpTransport] Listener error for ${type}:`, error);
+        }
+      }
+    }
   }
 
   async connect(): Promise<void> {
-    // HTTP transport doesn't maintain a persistent connection
-    // Just verify the endpoint is reachable
     try {
       const response = await fetch(this.options.gatewayUrl, {
         method: 'OPTIONS',
@@ -234,6 +277,7 @@ export class HttpTransport implements Transport {
       if (!response.ok && response.status !== 405) {
         throw new Error(`Gateway unavailable: ${response.status}`);
       }
+      this.emit('open', { type: 'open' });
     } catch (error) {
       throw new Error(`Failed to connect to gateway: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
@@ -261,8 +305,10 @@ export class HttpTransport implements Transport {
       }
 
       const data = await response.json() as PublicResponse;
+      this.emit('message', { type: 'message', data });
       this.options.onMessage(data);
     } catch (error) {
+      this.emit('error', { type: 'error', error: error as Error });
       this.options.onError(error as Error);
       throw error;
     }
@@ -270,6 +316,7 @@ export class HttpTransport implements Transport {
 
   close(): void {
     this.isClosed = true;
+    this.emit('close', { type: 'close' });
   }
 
   isConnected(): boolean {

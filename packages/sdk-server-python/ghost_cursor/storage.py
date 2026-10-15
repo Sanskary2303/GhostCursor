@@ -123,8 +123,8 @@ class SQGCBChatMessage(Base):
     session_id = sa.Column(sa.VARCHAR(64), sa.ForeignKey("ghost_chat_sessions.session_id"), nullable=False)
     role = sa.Column(sa.VARCHAR(20), nullable=False)
     content = sa.Column(sa.Text, nullable=False)
-    tool_calls = sa.Column(sa.JSONB, server_default="'[]'::jsonb")
-    client_actions = sa.Column(sa.JSONB, server_default="'[]'::jsonb")
+    tool_calls = sa.Column(sa.JSON, default=list)
+    client_actions = sa.Column(sa.JSON, default=list)
     token_count = sa.Column(sa.Integer, default=0)
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -158,8 +158,9 @@ class SQLAlchemyChatStore(ChatStore):
         """Create tables if they don't exist"""
         async def _create():
             async with self.engine.begin() as conn:
-                # Enable UUID extension if needed
-                await conn.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
+                # Enable UUID extension if PostgreSQL
+                if "postgresql" in str(self.engine.url):
+                    await conn.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
                 await conn.run_sync(Base.metadata.create_all)
 
         import asyncio
@@ -412,46 +413,134 @@ class SQLAlchemyChatStore(ChatStore):
             return True
 
 
-# Type definitions for better type checking
-@dataclass
-class ChatSession:
-    """Chat session model"""
-    session_id: str
-    tenant_id: str
-    user_id: str
-    title: str
-    summary: Optional[str]
-    created_at: datetime
-    updated_at: datetime
+class InMemoryChatStore(ChatStore):
+    """In-memory implementation of ChatStore for fast local testing and lightweight setups"""
 
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        return {
-            "tenant_id": self.tenant_id,
-            "title": self.title,
-            "summary": self.summary,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat(),
-        }
+    def __init__(self):
+        self._sessions: Dict[str, ChatSession] = {}
+        self._messages: Dict[str, List[ChatMessage]] = {}
 
+    async def create_session(
+        self,
+        user_id: str,
+        tenant_id: str,
+        title: str = "New Conversation",
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ChatSession:
+        session_id = str(uuid.uuid4())
+        now = datetime.now(timezone.utc)
+        session = ChatSession(
+            session_id=session_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            title=title,
+            summary=None,
+            created_at=now,
+            updated_at=now,
+        )
+        self._sessions[session_id] = session
+        self._messages[session_id] = []
+        return session
 
-@dataclass
-class ChatMessage:
-    """Chat message model"""
-    message_id: str
-    session_id: str
-    role: str
-    content: str
-    tool_calls: List[Dict[str, Any]]
-    client_actions: List[Dict[str, Any]]
-    token_count: int
-    created_at: datetime
+    async def get_session(self, session_id: str, user_id: str) -> Optional[ChatSession]:
+        session = self._sessions.get(session_id)
+        if session and session.user_id == user_id:
+            return session
+        return None
 
-    @property
-    def metadata(self) -> Dict[str, Any]:
-        return {
-            "message_id": self.message_id,
-            "role": self.role,
-            "token_count": self.token_count,
-            "created_at": self.created_at.isoformat(),
-        }
+    async def list_sessions(
+        self,
+        user_id: str,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> List[ChatSession]:
+        user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
+        user_sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return user_sessions[offset : offset + limit]
+
+    async def get_messages(
+        self,
+        session_id: str,
+        user_id: str,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[ChatMessage]:
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            return []
+        msgs = self._messages.get(session_id, [])
+        return msgs[offset : offset + limit]
+
+    async def append_messages(
+        self,
+        session_id: str,
+        user_id: str,
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            raise ValueError(f"Session not found or unauthorized: {session_id}")
+
+        for msg in messages:
+            chat_msg = ChatMessage(
+                message_id=msg.get("message_id") or str(uuid.uuid4()),
+                session_id=session_id,
+                role=msg["role"],
+                content=msg["content"],
+                tool_calls=msg.get("tool_calls", []),
+                client_actions=msg.get("client_actions", []),
+                token_count=msg.get("token_count", 0),
+                created_at=msg.get("created_at") or datetime.now(timezone.utc),
+            )
+            self._messages[session_id].append(chat_msg)
+
+        session.updated_at = datetime.now(timezone.utc)
+
+    async def count_turns(self, session_id: str, user_id: str) -> int:
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            return 0
+        msgs = self._messages.get(session_id, [])
+        return len([m for m in msgs if m.role == "user"])
+
+    async def generate_summary_and_title(
+        self,
+        session_id: str,
+        user_id: str,
+    ) -> tuple[str, str]:
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            raise ValueError(f"Session not found or unauthorized: {session_id}")
+        msgs = self._messages.get(session_id, [])
+        if not msgs:
+            return "Conversation", "New Conversation"
+        full_text = " ".join([m.content for m in msgs if m.role == "assistant"])
+        summary = full_text[:200] + "..." if len(full_text.split()) > 50 else full_text
+        title = full_text.split("\n\n")[0][:50] if full_text else "New Conversation"
+        session.summary = summary
+        session.title = title
+        return summary, title
+
+    async def update_session_metadata(
+        self,
+        session_id: str,
+        user_id: str,
+        title: Optional[str] = None,
+        summary: Optional[str] = None,
+    ) -> None:
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            raise ValueError(f"Session not found or unauthorized: {session_id}")
+        if title is not None:
+            session.title = title
+        if summary is not None:
+            session.summary = summary
+        session.updated_at = datetime.now(timezone.utc)
+
+    async def delete_session(self, session_id: str, user_id: str) -> bool:
+        session = await self.get_session(session_id, user_id)
+        if not session:
+            return False
+        self._sessions.pop(session_id, None)
+        self._messages.pop(session_id, None)
+        return True

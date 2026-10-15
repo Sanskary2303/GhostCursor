@@ -10,10 +10,10 @@
     "lint": "eslint src --ext ts,tsx"
   },
   "dependencies": {
+    "@ghost-cursor/sdk": "*",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.22.0",
-    "@ghost-cursor/sdk-react": "file:../../../packages/sdk-frontend"
+    "react-router-dom": "^6.22.0"
   },
   "devDependencies": {
     "@types/react": "^18.3.3",

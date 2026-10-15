@@ -9,7 +9,7 @@ import inspect
 import json
 import uuid
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Callable, Union, get_type_hints
+from typing import Any, Dict, List, Optional, Callable, Union, get_type_hints, Awaitable
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, validator, create_model, ValidationError
@@ -154,8 +154,51 @@ class BackendTool(Tool):
         self.execute_fn = execute_fn or self._not_implemented
 
     async def execute(self, arguments: Dict[str, Any], context: Dict[str, Any]) -> Any:
-        """Execute using registered function"""
-        return await self.execute_fn(arguments, context)
+        """Execute using registered function with Pydantic coercion and sync/async support"""
+        import inspect
+        import asyncio
+        from pydantic import BaseModel
+
+        fn = self.execute_fn
+        first_arg = arguments
+
+        class AttrDict(dict):
+            def __getattr__(self, name):
+                try:
+                    return self[name]
+                except KeyError:
+                    raise AttributeError(f"'AttrDict' object has no attribute '{name}'")
+
+            def __setattr__(self, name, value):
+                self[name] = value
+
+        if isinstance(arguments, dict):
+            first_arg = AttrDict(arguments)
+
+        num_params = 2
+        try:
+            sig = inspect.signature(fn)
+            params = list(sig.parameters.values())
+            num_params = len(params)
+            if params:
+                first_param = params[0]
+                annotation = first_param.annotation
+                if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+                    if hasattr(annotation, "model_validate"):
+                        first_arg = annotation.model_validate(arguments)
+                    else:
+                        first_arg = annotation(**arguments)
+        except Exception:
+            pass
+
+        if num_params == 1:
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(first_arg)
+            return fn(first_arg)
+        else:
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(first_arg, context)
+            return fn(first_arg, context)
 
     def _not_implemented(self, arguments: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """Default implementation for unimplemented tools"""

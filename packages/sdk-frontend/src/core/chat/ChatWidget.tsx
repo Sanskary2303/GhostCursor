@@ -3,8 +3,7 @@
  * Fully style-isolated from host application
  */
 
-import { h, Component } from 'preact';
-import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+import { h, Component, createRef } from 'preact';
 
 export interface Message {
   id: string;
@@ -29,8 +28,19 @@ export interface ChatWidgetProps {
   initialContext: any;
 }
 
-export class ChatWidget extends Component<ChatWidgetProps> {
-  state = {
+export interface ChatWidgetState {
+  isOpen: boolean;
+  messages: Message[];
+  inputValue: string;
+  isLoading: boolean;
+  showActionApproval: boolean;
+  pendingActions: any[];
+  context: any;
+  error: string | null;
+}
+
+export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
+  state: ChatWidgetState = {
     isOpen: false,
     messages: [] as Message[],
     inputValue: '',
@@ -41,8 +51,8 @@ export class ChatWidget extends Component<ChatWidgetProps> {
     error: null as string | null,
   };
 
-  private messagesEndRef = useRef<HTMLDivElement>(null);
-  private inputRef = useRef<HTMLTextAreaElement>(null);
+  private messagesEndRef = createRef<HTMLDivElement>();
+  private inputRef = createRef<HTMLTextAreaElement>();
   private abortController: AbortController | null = null;
 
   componentDidMount() {
@@ -229,45 +239,6 @@ export class ChatWidget extends Component<ChatWidgetProps> {
 
     const positionStyle = positions[theme.position] || positions['bottom-right'];
 
-    if (!isOpen && messages.length === 0) {
-      // Render just the trigger button
-      return (
-        <div
-          id="ghost-cursor-widget"
-          style={{
-            position: 'fixed',
-            ...positionStyle,
-            zIndex: 99999,
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          }}
-        >
-          <button
-            onClick={this.toggleChat}
-            style={{
-              width: '56px',
-              height: '56px',
-              borderRadius: '28px',
-              background: theme.primaryColor,
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
-              transition: 'transform 0.2s, box-shadow 0.2s',
-            }}
-            onMouseEnter={e => e.currentTarget.style.transform = 'scale(1.05)'}
-            onMouseLeave={e => e.currentTarget.style.transform = 'scale(1)'}
-            aria-label="Open Ghost Cursor chat"
-          >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-          </button>
-        </div>
-      );
-    }
-
     return (
       <div
         id="ghost-cursor-widget"
@@ -278,7 +249,7 @@ export class ChatWidget extends Component<ChatWidgetProps> {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        {isOpen && (
+        {isOpen ? (
           <div
             className="ghost-chat-panel"
             style={{
@@ -349,14 +320,22 @@ export class ChatWidget extends Component<ChatWidgetProps> {
 
             {/* Messages */}
             <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {messages.map(message => (
-                <MessageBubble
-                  key={message.id}
-                  message={message}
-                  theme={theme}
-                  onOptionSelect={this.handleOptionSelect}
-                />
-              ))}
+              {messages.length === 0 ? (
+                <div style={{ textAlign: 'center', color: '#6b7280', margin: 'auto 0', padding: '20px' }}>
+                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>👻</div>
+                  <div style={{ fontWeight: 600, fontSize: '15px', color: '#111827', marginBottom: '4px' }}>Ghost Cursor Assistant</div>
+                  <div style={{ fontSize: '13px', lineHeight: 1.4 }}>Ask me to help you navigate, find products, add to cart, or track orders!</div>
+                </div>
+              ) : (
+                messages.map(message => (
+                  <MessageBubble
+                    key={message.id}
+                    message={message}
+                    theme={theme}
+                    onOptionSelect={this.handleOptionSelect}
+                  />
+                ))
+              )}
               <div ref={this.messagesEndRef} />
             </div>
 
@@ -439,29 +418,53 @@ export class ChatWidget extends Component<ChatWidgetProps> {
               )}
             </form>
           </div>
-        )}
-
-        {/* Toggle Button (when open) */}
-        {!isOpen && (
+        ) : (
           <button
             onClick={this.toggleChat}
             style={{
+              position: 'relative',
               width: '56px',
               height: '56px',
               borderRadius: '28px',
-              background: theme.primaryColor,
+              background: theme.primaryColor || '#0052FF',
               border: 'none',
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.15)',
+              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)',
+              transition: 'transform 0.2s, box-shadow 0.2s',
             }}
+            onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.08)')}
+            onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
             aria-label="Open Ghost Cursor chat"
           >
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
+            {messages.length > 0 && (
+              <span
+                style={{
+                  position: 'absolute',
+                  top: '-2px',
+                  right: '-2px',
+                  background: '#ef4444',
+                  color: 'white',
+                  borderRadius: '10px',
+                  minWidth: '20px',
+                  height: '20px',
+                  fontSize: '11px',
+                  fontWeight: 'bold',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: '0 4px',
+                  border: '2px solid white',
+                }}
+              >
+                {messages.length}
+              </span>
+            )}
           </button>
         )}
       </div>

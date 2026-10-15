@@ -5,6 +5,8 @@ Defines the AI agent with fixed frontend action tools and dynamic customer backe
 Uses Gemini 2.0 via Vertex AI for reasoning.
 """
 
+from __future__ import annotations
+
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 

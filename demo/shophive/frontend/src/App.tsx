@@ -1,7 +1,5 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { GhostCursor } from '@ghost-cursor/sdk-react';
-import '@ghost-cursor/sdk-react/dist/index.css';
 import { NavigationHeader } from './components/NavigationHeader';
 import { Home } from './pages/Home';
 import { ProductDetail } from './pages/ProductDetail';
@@ -9,6 +7,9 @@ import { Cart } from './pages/Cart';
 import { Checkout } from './pages/Checkout';
 import { OrderTracking } from './pages/OrderTracking';
 import { Settings } from './pages/Settings';
+
+// [GHOST-CURSOR INTEGRATION - STEP 1: IMPORT SDK COMPONENT]
+import { GhostCursor } from '@ghost-cursor/sdk';
 
 export function App() {
   return (
@@ -27,13 +28,13 @@ export function App() {
           </Routes>
         </main>
 
-        {/* Ghost Cursor Widget Integration - Only 9 lines of code! */}
+        {/* [GHOST-CURSOR INTEGRATION - STEP 2: MOUNT WIDGET WITH ENDPOINT & CONFIG] */}
         <GhostCursor
           apiEndpoint="/api/ghost-cursor"
           theme={{
             primaryColor: '#0052FF',
             cursorColor: '#FF4D4D',
-            position: 'bottom-right'
+            position: 'bottom-right',
           }}
           requireApprovalForActions={true}
         />

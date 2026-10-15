@@ -267,8 +267,16 @@ export async function resolveTargetWithCascade(
  * Re-resolves immediately before acting to eliminate stale references
  */
 export function reResolveElement(targetId: string, options: ResolutionOptions = {}): HTMLElement | null {
-  const result = resolveTargetWithCascade(targetId, { ...options, timeout: 0, pollInterval: 0 });
-  return result.element;
+  const opts = { ...DEFAULT_OPTIONS, ...options };
+  const candidate = resolveByGhostId(targetId) ||
+                    resolveByTestId(targetId) ||
+                    resolveById(targetId) ||
+                    resolveByAria(targetId) ||
+                    resolveByText(targetId);
+  if (candidate && isInteractable(candidate, opts)) {
+    return candidate;
+  }
+  return null;
 }
 
 /**

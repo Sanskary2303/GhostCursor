@@ -31,6 +31,9 @@ class RunState:
     latest_reply: str = ""
     latest_event_id: Optional[str] = None
     latest_event_digest: Optional[str] = None
+    latest_tool_results: Optional[List[Any]] = None
+    latest_action_results: Optional[List[Any]] = None
+    latest_kind: Optional[str] = None
     history: List[Dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
@@ -77,6 +80,15 @@ class RunState:
             "revision": self.revision,
             "status": self.status,
             "turn_count": self.turn_count,
+            "kind": self.latest_kind,
+            "tool_results": [
+                r.model_dump() if hasattr(r, "model_dump") else r
+                for r in (self.latest_tool_results or [])
+            ],
+            "action_results": [
+                r.model_dump() if hasattr(r, "model_dump") else r
+                for r in (self.latest_action_results or [])
+            ],
             "history": [
                 {
                     "revision": h.get("revision"),

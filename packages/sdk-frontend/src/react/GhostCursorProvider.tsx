@@ -1,4 +1,5 @@
 "use client";
+/** @jsxImportSource react */
 
 import React, { createContext, useContext, ReactNode } from 'react';
 import type { GhostCursorProps } from './types';
@@ -11,7 +12,7 @@ export interface GhostCursorContextType extends GhostCursorProps {
 const GhostCursorContext = createContext<GhostCursorContextType | null>(null);
 
 export const GhostCursorProvider: React.FC<{
-  children: ReactNode;
+  children?: ReactNode;
   value: GhostCursorProps;
 }> = ({ children, value }) => {
   const contextValue: GhostCursorContextType = {
@@ -20,11 +21,7 @@ export const GhostCursorProvider: React.FC<{
     error: undefined,
   };
 
-  return (
-    <GhostCursorContext.Provider value={contextValue}>
-      {children}
-    </GhostCursorContext.Provider>
-  );
+  return React.createElement(GhostCursorContext.Provider, { value: contextValue }, children);
 };
 
 export const useGhostCursor = () => {

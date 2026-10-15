@@ -177,7 +177,7 @@ export class ContextProvider {
         }
       } else if (observed.element instanceof HTMLInputElement && observed.element.type === 'checkbox') {
         const value = observed.element.checked;
-        if (value !== observed.lastValue) {
+        if (String(value) !== observed.lastValue) {
           values[targetId] = value;
           observed.lastValue = String(value);
         }

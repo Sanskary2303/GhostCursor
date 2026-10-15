@@ -29,8 +29,6 @@ dependencies = [
     "httpx>=0.26.0",
     "sqlalchemy>=2.0.0",
     "python-dotenv>=1.0.0",
-    "hmac>=0.1",
-    "hashlib>=0.1",
 ]
 
 [project.optional-dependencies]

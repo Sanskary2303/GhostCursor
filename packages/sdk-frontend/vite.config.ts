@@ -1,11 +1,9 @@
 import { defineConfig } from 'vite';
 import dts from 'vite-plugin-dts';
-import { vanillaExtractPlugin } from '@vanilla-extract/vite-plugin';
 import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [
-    vanillaExtractPlugin(),
     dts({
       insertTypesEntry: true,
       outDir: 'dist',

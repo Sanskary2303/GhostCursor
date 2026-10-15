@@ -6,21 +6,24 @@ forwards requests to Ghost Cursor Cloud, and handles local tool execution.
 """
 
 import os
-import hmac4
+import hmac
 import hashlib
 import json
 import time
 import uuid
+import logging
 from typing import Any, Callable, Dict, List, Optional, Awaitable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
 import httpx
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ConfigDict
 
 from .storage import ChatStore
 from .brain_loader import BrainLoader
 from .tools import Tool, ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -29,10 +32,12 @@ from .tools import Tool, ToolRegistry
 
 class GhostCursorConfig(BaseModel):
     """Configuration for Ghost Cursor Backend"""
-    api_key: str = Field(..., min_length=32, description="Server-to-server API key")
-    tenant_id: str = Field(..., min_length=1, max_length=64, description="Tenant identifier")
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    api_key: str = Field(default="test-key-shophive-demo-super-secret-key-32chars", min_length=1, description="Server-to-server API key")
+    tenant_id: str = Field(default="shophive_demo", min_length=1, max_length=64, description="Tenant identifier")
     brain_dir: str = Field(default="./brain", description="Path to brain markdown files")
-    service_url: str = Field(default="https://api.ghostcursor.ai", description="Ghost Cursor Cloud URL")
+    service_url: str = Field(default="http://localhost:8080", description="Ghost Cursor Cloud URL")
     chat_store: Optional[ChatStore] = None
     request_timeout: float = Field(default=210.0, description="Request timeout in seconds")
     max_tool_rounds: int = Field(default=4, description="Max tool rounds per request")
@@ -60,6 +65,7 @@ class HostedRunRequest(BaseModel):
     """Request to create/continue a run on Ghost Cursor Cloud"""
     protocolVersion: str = Field(default="1")
     requestId: Optional[str] = None
+    runId: Optional[str] = None
     eventId: Optional[str] = None
     revision: Optional[int] = None
     message: Optional[str] = None
@@ -168,7 +174,9 @@ class GhostCursorBackend:
     Handles proxying requests to Ghost Cursor Cloud and executing local tools.
     """
 
-    def __init__(self, config: GhostCursorConfig):
+    def __init__(self, config: Optional[GhostCursorConfig] = None, **kwargs):
+        if config is None:
+            config = GhostCursorConfig(**kwargs)
         self.config = config
         self.brain_loader = BrainLoader(config.brain_dir)
         self.tool_registry = ToolRegistry()
@@ -298,21 +306,40 @@ class GhostCursorBackend:
         self,
         name: str,
         description: str,
-        schema: Dict[str, Any],
+        schema: Any,
         read_only: bool = True,
-        execute_fn: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[Any]]] = None,
+        execute_fn: Optional[Callable] = None,
     ):
-        """Register a customer backend read-only tool"""
+        """Register a customer backend read-only tool. Supports direct call and decorator."""
         from .tools import BackendTool
 
-        tool = BackendTool(
-            name=name,
-            description=description,
-            parameters=schema,
-            read_only=read_only,
-            execute_fn=execute_fn,
-        )
-        self.tool_registry.register(tool)
+        def _make_tool(fn):
+            params = schema
+            if hasattr(schema, "model_json_schema"):
+                params = schema.model_json_schema()
+            elif hasattr(schema, "schema"):
+                params = schema.schema()
+            elif not isinstance(schema, dict):
+                params = {"type": "object", "properties": {}}
+
+            tool = BackendTool(
+                name=name,
+                description=description,
+                parameters=params,
+                read_only=read_only,
+                execute_fn=fn,
+            )
+            self.tool_registry.register(tool)
+            return tool
+
+        if execute_fn is not None:
+            return _make_tool(execute_fn)
+
+        def decorator(fn):
+            _make_tool(fn)
+            return fn
+
+        return decorator
 
     def get_tool_declarations(self) -> List[Dict[str, Any]]:
         """Get all registered tool declarations for the orchestrator"""
@@ -327,36 +354,63 @@ class GhostCursorBackend:
         """
         Handle a user turn: load brain, proxy to Ghost Cursor Cloud,
         execute any local tools, and return public response.
+        Supports both new runs (command: 'start') and continuation (command: 'continue').
         """
-        # Validate input
-        if not payload.get("message"):
-            raise ValueError("Message is required")
-
-        # Load brain context
-        page = current_page or payload.get("context", {}).get("page", "unknown")
-        brain_content = self.brain_loader.load_context(page)
-
-        # Get available targets from context
-        available_targets = payload.get("context", {}).get("availableTargets", [])
-
-        # Build request for Ghost Cursor Cloud
-        request_id = payload.get("requestId") or str(uuid.uuid4())
-
-        hosted_request = HostedRunRequest(
-            protocolVersion="1",
-            requestId=request_id,
-            message=payload["message"],
-            context=payload.get("context", {}),
-            brain=brain_content,
-            capabilities=[],
-            tools=self.get_tool_declarations(),
+        is_continue = payload.get("command") == "continue" or bool(
+            payload.get("runId") and (payload.get("kind") or "results" in payload or "answer" in payload)
         )
 
-        # Send to Ghost Cursor Cloud
-        response = await self._call_hosted_api(hosted_request, user_id)
+        if not is_continue:
+            if not payload.get("message"):
+                raise ValueError("Message is required for new run")
 
-        # Handle tool calls if any (Gateway Loopback)
-        if response.toolCalls:
+            # Load brain context
+            page = current_page or payload.get("context", {}).get("page", "unknown")
+            brain_content = self.brain_loader.load_context(page)
+
+            # Get available targets from context
+            available_targets = payload.get("context", {}).get("availableTargets", [])
+
+            # Build request for Ghost Cursor Cloud
+            request_id = payload.get("requestId") or str(uuid.uuid4())
+
+            hosted_request = HostedRunRequest(
+                protocolVersion=payload.get("protocolVersion", "1"),
+                requestId=request_id,
+                message=payload["message"],
+                context=payload.get("context", {}),
+                brain=brain_content,
+                capabilities=[],
+                tools=self.get_tool_declarations(),
+            )
+
+            # Send to Ghost Cursor Cloud
+            response = await self._call_hosted_api(hosted_request, user_id)
+        else:
+            run_id = payload.get("runId")
+            if not run_id:
+                raise ValueError("runId is required for continue")
+
+            event_id = payload.get("eventId") or str(uuid.uuid4())
+            revision = payload.get("revision", 0)
+            kind = payload.get("kind") or ("answer" if payload.get("answer") else "actions")
+
+            continue_request = HostedRunRequest(
+                protocolVersion=payload.get("protocolVersion", "1"),
+                runId=run_id,
+                eventId=event_id,
+                revision=revision,
+                kind=kind,
+                results=payload.get("results"),
+                answer=payload.get("answer"),
+                context=payload.get("context", {}),
+            )
+            response = await self._call_hosted_api(continue_request, user_id)
+
+        # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
+        rounds = 0
+        while response.toolCalls and rounds < self.config.max_tool_rounds:
+            rounds += 1
             tool_results = await self._execute_local_tools(
                 response.runId,
                 response.revision,
@@ -367,6 +421,7 @@ class GhostCursorBackend:
             # Continue run with tool results
             continue_request = HostedRunRequest(
                 protocolVersion="1",
+                runId=response.runId,
                 eventId=str(uuid.uuid4()),
                 revision=response.revision,
                 kind="tools",
@@ -395,13 +450,31 @@ class GhostCursorBackend:
             "Content-Type": "application/json",
         }
 
+        is_continue = bool(request.eventId or request.kind)
         url = f"{self.config.service_url}/v1/runs"
-        if request.eventId:
-            url = f"{self.config.service_url}/v1/runs/{request.requestId or ''}/continue"
+        if is_continue:
+            run_id = request.runId or request.requestId or ""
+            url = f"{self.config.service_url}/v1/runs/{run_id}/continue"
+            post_data: Dict[str, Any] = {
+                "protocolVersion": request.protocolVersion,
+                "eventId": request.eventId or str(uuid.uuid4()),
+                "revision": request.revision if request.revision is not None else 0,
+                "kind": request.kind or "actions",
+            }
+            if request.results is not None:
+                post_data["results"] = [
+                    r.model_dump() if hasattr(r, "model_dump") else r for r in request.results
+                ]
+            if request.answer is not None:
+                post_data["answer"] = request.answer
+            if request.context:
+                post_data["context"] = request.context
+        else:
+            post_data = request.model_dump(exclude_none=True)
 
         response = await client.post(
             url,
-            json=request.model_dump(exclude_none=True),
+            json=post_data,
             headers=headers,
         )
 
@@ -477,9 +550,44 @@ class GhostCursorBackend:
         if not self.chat_store or not response.runId:
             return
 
-        # This would typically create/update a session and append messages
-        # Implementation depends on the chat store interface
-        pass
+        try:
+            session_id = request_payload.get("sessionId") or response.runId
+            session = await self.chat_store.get_session(session_id, user_id)
+            if not session:
+                user_msg = request_payload.get("message") or request_payload.get("answer") or "New Conversation"
+                title = str(user_msg)[:50]
+                session = await self.chat_store.create_session(
+                    user_id=user_id,
+                    tenant_id=self.config.tenant_id,
+                    title=title,
+                )
+                session_id = session.session_id
+
+            messages = []
+            if request_payload.get("message"):
+                messages.append({
+                    "role": "user",
+                    "content": request_payload["message"],
+                })
+            elif request_payload.get("answer"):
+                messages.append({
+                    "role": "user",
+                    "content": request_payload["answer"],
+                })
+
+            if response.reply:
+                messages.append({
+                    "role": "assistant",
+                    "content": response.reply,
+                    "client_actions": [
+                        a if isinstance(a, dict) else a.model_dump() for a in (response.actions or [])
+                    ],
+                })
+
+            if messages:
+                await self.chat_store.append_messages(session_id, user_id, messages)
+        except Exception as e:
+            logger.warning(f"Failed to persist chat turn: {e}")
 
     def _project_public_response(self, response: HostedRunResponse) -> Dict[str, Any]:
         """Project internal response to public envelope (exclude internals)"""

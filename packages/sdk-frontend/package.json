@@ -3,17 +3,19 @@
   "version": "0.1.0",
   "description": "Ghost Cursor Frontend SDK - Framework-neutral DOM executor, chat widget, AI cursor, and tour overlay",
   "type": "module",
-  "main": "dist/index.js",
-  "module": "dist/index.js",
+  "main": "dist/ghost-cursor.es.js",
+  "module": "dist/ghost-cursor.es.js",
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "import": "./dist/ghost-cursor.es.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/ghost-cursor.es.js"
     },
     "./react": {
-      "import": "./dist/react/index.js",
-      "types": "./dist/react/index.d.ts"
+      "import": "./dist/ghost-cursor.es.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/ghost-cursor.es.js"
     }
   },
   "files": [

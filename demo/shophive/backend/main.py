@@ -9,16 +9,17 @@ import os
 import sys
 from pathlib import Path
 
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "packages" / "sdk-server-python"))
+# Add current and parent directories to path for imports
+backend_dir = Path(__file__).resolve().parent
+sys.path.insert(0, str(backend_dir))
+sys.path.insert(0, str(backend_dir.parent.parent / "packages" / "sdk-server-python"))
 
 from fastapi import FastAPI, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # Import Ghost Cursor SDK
 try:
-    from ghost_cursor import GhostCursorBackend, SQLAlchemyChatStore
-    from ghost_cursor.fastapi import integrate_ghost_cursor
+    from ghost_cursor import GhostCursorBackend, InMemoryChatStore, SQLAlchemyChatStore
 except ImportError:
     print("Error: ghost-cursor package not found. Install with: pip install ghost-cursor")
     sys.exit(1)
@@ -33,7 +34,7 @@ from tools.ghost_tools import register_shophive_tools
 GHOST_CURSOR_API_KEY = os.getenv("GHOST_CURSOR_API_KEY", "test-key-shophive-demo")
 GHOST_CURSOR_TENANT_ID = os.getenv("GHOST_CURSOR_TENANT_ID", "shophive_demo")
 GHOST_CURSOR_BRAIN_DIR = os.getenv("GHOST_CURSOR_BRAIN_DIR", "./brain")
-GHOST_CURSOR_SERVICE_URL = os.getenv("GHOST_CURSOR_SERVICE_URL", "https://api.ghostcursor.ai")
+GHOST_CURSOR_SERVICE_URL = os.getenv("GHOST_CURSOR_SERVICE_URL", "http://localhost:8080")
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./shophive.db")
 
@@ -66,6 +67,10 @@ ghost = GhostCursorBackend(
     brain_dir=GHOST_CURSOR_BRAIN_DIR,
     service_url=GHOST_CURSOR_SERVICE_URL,
 )
+
+# Attach chat store for conversation persistence
+chat_store = InMemoryChatStore()
+ghost.attach_chat_store(chat_store)
 
 # Register customer backend tools
 register_shophive_tools(ghost)
@@ -103,19 +108,53 @@ async def get_product(product_id: str):
 # Ghost Cursor Integration
 # ============================================================================
 
-from fastapi import APIRouter
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 ghost_router = APIRouter(prefix="/api/ghost-cursor", tags=["ghost-cursor"])
 
+@ghost_router.post("")
 @ghost_router.post("/run")
+@ghost_router.post("/continue")
 async def handle_ghost_turn(request: Request, user_id: str = "anonymous"):
     """Handle Ghost Cursor conversation turns"""
     payload = await request.json()
     return await ghost.handle_turn(payload=payload, user_id=user_id)
 
+@ghost_router.websocket("")
+@ghost_router.websocket("/")
+@ghost_router.websocket("/ws")
+async def handle_ghost_ws(websocket: WebSocket, user_id: str = "anonymous"):
+    """WebSocket connection for real-time cursor interaction"""
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_json()
+            response = await ghost.handle_turn(payload=data, user_id=user_id)
+            await websocket.send_json(response)
+    except WebSocketDisconnect:
+        pass
+    except Exception as e:
+        try:
+            await websocket.send_json({"error": str(e), "status": "failed"})
+        except Exception:
+            pass
+
 @ghost_router.get("/sessions")
 async def list_sessions(user_id: str = "anonymous"):
     """List user chat sessions"""
+    if ghost.chat_store:
+        sessions = await ghost.chat_store.list_sessions(user_id)
+        return {
+            "sessions": [
+                {
+                    "session_id": s.session_id,
+                    "title": s.title,
+                    "summary": s.summary,
+                    "updated_at": s.updated_at.isoformat(),
+                }
+                for s in sessions
+            ]
+        }
     return {"sessions": []}
 
 app.include_router(ghost_router)

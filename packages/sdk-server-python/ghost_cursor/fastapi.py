@@ -130,29 +130,26 @@ def create_ghost_cursor_router(
             return user_id_extractor(request)
         return GhostCursorDependencies._default_user_extractor(request)
 
+    @router.post("", response_model=GhostCursorResponse)
     @router.post("/run", response_model=GhostCursorResponse)
     async def handle_ghost_turn(
-        request: GhostCursorStartRequest,
         http_request: Request,
         user_id: str = Depends(get_user_id),
     ):
         """
-        Start a new Ghost Cursor conversation turn.
+        Handle Ghost Cursor conversation turn (start or continue).
         Proxies to Ghost Cursor Cloud via server-to-server HTTPS.
         """
-        # Build payload
-        payload = {
-            "message": request.message,
-            "context": request.context,
-            "requestId": request.requestId,
-        }
-
-        # Handle via backend
         try:
+            payload = await http_request.json()
+            current_page = None
+            if isinstance(payload.get("context"), dict):
+                current_page = payload["context"].get("page")
+
             response = await backend.handle_turn(
                 payload=payload,
                 user_id=user_id,
-                current_page=request.context.get("page"),
+                current_page=current_page,
             )
             return JSONResponse(content=response)
         except Exception as e:
@@ -165,9 +162,21 @@ def create_ghost_cursor_router(
         user_id: str = Depends(get_user_id),
     ):
         """Continue an existing Ghost Cursor run"""
-        # This would call the continue endpoint on the backend
-        # Implementation depends on backend API
-        raise HTTPException(status_code=501, detail="Continue endpoint not yet implemented")
+        try:
+            payload = request.model_dump(exclude_none=True)
+            payload["command"] = "continue"
+            current_page = None
+            if isinstance(payload.get("context"), dict):
+                current_page = payload["context"].get("page")
+
+            response = await backend.handle_turn(
+                payload=payload,
+                user_id=user_id,
+                current_page=current_page,
+            )
+            return JSONResponse(content=response)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
     @router.get("/sessions", response_model=List[SessionResponse])
     async def list_sessions(
@@ -176,10 +185,11 @@ def create_ghost_cursor_router(
         offset: int = 0,
     ):
         """List user's chat sessions"""
-        if not chat_store:
+        active_store = chat_store or getattr(backend, "chat_store", None)
+        if not active_store:
             raise HTTPException(status_code=503, detail="Chat store not configured")
 
-        sessions = await chat_store.list_sessions(user_id, limit=limit, offset=offset)
+        sessions = await active_store.list_sessions(user_id, limit=limit, offset=offset)
         return [
             SessionResponse(
                 session_id=s.session_id,
@@ -199,13 +209,14 @@ def create_ghost_cursor_router(
         user_id: str = Depends(get_user_id),
     ):
         """Create a new chat session"""
-        if not chat_store:
+        active_store = chat_store or getattr(backend, "chat_store", None)
+        if not active_store:
             raise HTTPException(status_code=503, detail="Chat store not configured")
 
         # Get tenant from backend config
         tenant_id = backend.config.tenant_id if hasattr(backend, 'config') else "default"
 
-        session = await chat_store.create_session(
+        session = await active_store.create_session(
             user_id=user_id,
             tenant_id=tenant_id,
             title=request.title,
@@ -229,10 +240,11 @@ def create_ghost_cursor_router(
         offset: int = 0,
     ):
         """Get messages for a session"""
-        if not chat_store:
+        active_store = chat_store or getattr(backend, "chat_store", None)
+        if not active_store:
             raise HTTPException(status_code=503, detail="Chat store not configured")
 
-        messages = await chat_store.get_messages(session_id, user_id, limit=limit, offset=offset)
+        messages = await active_store.get_messages(session_id, user_id, limit=limit, offset=offset)
         return [
             {
                 "message_id": m.message_id,
@@ -259,24 +271,21 @@ def create_ghost_cursor_router(
             while True:
                 data = await websocket.receive_json()
 
-                if data.get("command") == "start":
-                    payload = {
-                        "message": data.get("message"),
-                        "context": data.get("context", {}),
-                        "requestId": data.get("requestId"),
-                    }
+                response = await backend.handle_turn(
+                    payload=data,
+                    user_id=user_id,
+                    current_page=data.get("context", {}).get("page") if isinstance(data.get("context"), dict) else None,
+                )
 
-                    response = await backend.handle_turn(
-                        payload=payload,
-                        user_id=user_id,
-                        current_page=data.get("context", {}).get("page"),
-                    )
+                await websocket.send_json(response)
 
-                    await websocket.send_json(response)
-
-                elif data.get("command") == "continue":
-                    # Handle continue via WebSocket
-                    pass
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            try:
+                await websocket.send_json({"error": str(e), "status": "failed"})
+            except Exception:
+                pass
 
         except WebSocketDisconnect:
             pass
@@ -286,6 +295,11 @@ def create_ghost_cursor_router(
             await websocket.close()
 
     return router
+
+
+# Alias for backward compatibility
+ghost_cursor_router = create_ghost_cursor_router
+GhostCursorFastAPI = GhostCursorBackend
 
 
 # ============================================================================

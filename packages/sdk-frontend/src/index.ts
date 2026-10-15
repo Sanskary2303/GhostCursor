@@ -3,7 +3,9 @@
 // Re-export all SDK components for easy access
 export { GhostCursor } from './react/GhostCursor';
 export { GhostCursorProvider } from './react/GhostCursorProvider';
-export type { GhostCursorProps } from './react/GhostCursor';
+export type { GhostCursorProps } from './react/types';
+export { createGhostCursor } from './core/SDK';
+export type { GhostCursorSDK, CreateGhostCursorOptions } from './core/SDK';
 
 // Core types
 export * from './core/types';

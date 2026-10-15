@@ -360,9 +360,64 @@ class MockVertexAIClient(BaseVertexClient):
         user_message: str,
         run_context: Dict[str, Any],
     ) -> HostedRunResponse:
-        """Generate mock response based on message patterns"""
+        """Generate mock response based on message patterns and continuation context"""
         run_id = run_context.get("run_id", str(uuid.uuid4()))
         revision = run_context.get("revision", 0)
+
+        tool_results = run_context.get("tool_results", [])
+        action_results = run_context.get("action_results", [])
+        kind = run_context.get("kind")
+
+        # Handle tool results continuation
+        if tool_results:
+            reply_lines = []
+            for tr in tool_results:
+                out = tr.get("output") if isinstance(tr, dict) else getattr(tr, "output", None)
+                if isinstance(out, dict):
+                    if "order_id" in out:
+                        reply_lines.append(
+                            f"I found your order {out.get('order_id')}: status is {out.get('status')} via {out.get('carrier')} "
+                            f"(tracking #{out.get('tracking_number')}). Shipped on {out.get('shipped_date')} and estimated delivery is {out.get('estimated_delivery')}."
+                        )
+                    elif "sku" in out:
+                        reply_lines.append(
+                            f"Inventory check for SKU {out.get('sku')} (size {out.get('size')}): {out.get('available_quantity', 20)} units currently in stock."
+                        )
+                    elif "error" in out:
+                        reply_lines.append(f"Backend tool returned: {out.get('error')}")
+                    else:
+                        reply_lines.append(f"Tool executed successfully: {json.dumps(out)}")
+                elif out:
+                    reply_lines.append(str(out))
+
+            reply = " ".join(reply_lines) if reply_lines else "I've retrieved the requested details from the system."
+            return HostedRunResponse(
+                protocolVersion="1",
+                runId=run_id,
+                revision=revision,
+                status="completed",
+                reply=reply,
+            )
+
+        # Handle action results continuation
+        if kind == "actions" or action_results:
+            return HostedRunResponse(
+                protocolVersion="1",
+                runId=run_id,
+                revision=revision,
+                status="completed",
+                reply="Actions executed successfully on your screen. The changes are now active!",
+            )
+
+        # Handle clarification answer continuation
+        if kind == "answer":
+            return HostedRunResponse(
+                protocolVersion="1",
+                runId=run_id,
+                revision=revision,
+                status="completed",
+                reply=f"Thank you for choosing '{user_message}'. I have applied this choice and proceeded.",
+            )
 
         message_lower = user_message.lower().strip()
 

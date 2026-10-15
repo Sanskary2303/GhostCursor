@@ -342,7 +342,7 @@ export class TourEngine {
     const stepNumber = this.state.currentIndex + 1;
     const totalSteps = this.state.steps.length;
 
-    const messageEl = tooltip.querySelector('.tour-message') || document.createElement('div');
+    const messageEl = (tooltip.querySelector('.tour-message') as HTMLElement) || document.createElement('div');
     messageEl.className = 'tour-message';
     messageEl.style.marginBottom = '8px';
     messageEl.innerHTML = `

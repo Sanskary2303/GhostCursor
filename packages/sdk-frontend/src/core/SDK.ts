@@ -1,9 +1,5 @@
-/**
- * Main SDK Entry Point - createGhostCursor function
- * Orchestrates all SDK components: Context, Transport, Executor, Cursor, Tour, Widget
- */
-
-import type { GhostCursorProps, PageContext, Action, ToolResult, Target } from './types';
+import { h, render } from 'preact';
+import type { PageContext, Action, ToolResult, Target } from './types';
 import { ContextProvider } from './context/ContextProvider';
 import { createTransport, TransportManager, Transport } from './transport/Transport';
 import { ActionExecutor, ExecutionOptions } from './executor/ActionExecutor';
@@ -135,22 +131,59 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   });
 
   // Mount widget
-  const widgetContainer = mount || document.createElement('div');
-  widgetContainer.id = 'ghost-cursor-widget-container';
-  if (!mount) {
-    document.body.appendChild(widgetContainer);
+  let widgetContainer: HTMLElement;
+  if (mount) {
+    widgetContainer = mount;
+    if (!document.body.contains(widgetContainer)) {
+      widgetContainer.id = widgetContainer.id || 'ghost-cursor-widget-container';
+      document.body.appendChild(widgetContainer);
+    }
+  } else {
+    const existing = document.getElementById('ghost-cursor-widget-container');
+    if (existing) {
+      widgetContainer = existing;
+    } else {
+      widgetContainer = document.createElement('div');
+      widgetContainer.id = 'ghost-cursor-widget-container';
+      document.body.appendChild(widgetContainer);
+    }
   }
 
-  // Create shadow root for widget isolation
-  const shadowRoot = widgetContainer.attachShadow({ mode: 'open' });
-
-  // We'll render the Preact widget into the shadow root
-  // For now, store reference to render later
-  let widgetInstance: any = null;
+  // Create shadow root for widget isolation (reuse if already present)
+  const shadowRoot = widgetContainer.shadowRoot || widgetContainer.attachShadow({ mode: 'open' });
 
   // State
   let isDisposed = false;
   let currentRunId: string | null = null;
+
+  // Render Preact ChatWidget into shadow root
+  render(
+    h(ChatWidget, {
+      apiEndpoint: gatewayUrl,
+      theme: mergedTheme,
+      requireApprovalForActions,
+      initialContext: { page: getPage(), values: {}, availableTargets: [] },
+      onSendMessage: async (msg: string, ctx: any) => {
+        const pageContext = contextProvider.getContext() || {
+          page: getPage(),
+          values: {},
+          availableTargets: [],
+        };
+        if (!currentRunId) {
+          const res = await transportManager.start(msg, pageContext);
+          currentRunId = res.runId;
+          return res;
+        } else {
+          return await transportManager.continue('answer', { answer: msg });
+        }
+      },
+      onActionApproval: async (actions: any[]) => {
+        await executeActions(actions);
+        return true;
+      },
+    }),
+    shadowRoot
+  );
 
   // Register customer targets
   for (const [id, target] of Object.entries(targets)) {
@@ -293,6 +326,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     transportManager.close();
     actionExecutor.dispose();
     disposeCursorEngine();
+    render(null, shadowRoot);
 
     if (widgetContainer.parentNode && !mount) {
       widgetContainer.parentNode.removeChild(widgetContainer);

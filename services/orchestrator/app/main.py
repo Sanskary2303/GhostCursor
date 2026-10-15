@@ -4,10 +4,12 @@ Ghost Cursor Orchestrator - Main FastAPI Application
 Google ADK Agent Engine with Vertex AI Gemini 2.0 integration.
 """
 
+from __future__ import annotations
+
 import os
 import logging
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import List, Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,38 +41,42 @@ vertex_client: Optional[VertexAIClient] = None
 loopback_handler: Optional[GatewayLoopbackHandler] = None
 
 
+def init_globals():
+    """Ensure global services are initialized even if lifespan wasn't triggered (e.g. tests)"""
+    global run_store, vertex_client, loopback_handler
+    if run_store is None:
+        database_url = os.getenv("DATABASE_URL")
+        if database_url:
+            run_store = PostgreSQLRunStore(database_url)
+        else:
+            run_store = InMemoryRunStore()
+
+    if vertex_client is None:
+        use_mock = os.getenv("USE_MOCK_LLM", "true").lower() == "true"
+        if use_mock:
+            vertex_client = MockVertexAIClient()
+        else:
+            project_id = os.getenv("GCP_PROJECT_ID")
+            location = os.getenv("GCP_LOCATION", "us-central1")
+            if project_id:
+                vertex_client = VertexAIClient(project_id=project_id, location=location)
+            else:
+                vertex_client = MockVertexAIClient()
+
+    if loopback_handler is None:
+        loopback_handler = GatewayLoopbackHandler()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     global run_store, vertex_client, loopback_handler
 
-    # Initialize run store
-    database_url = os.getenv("DATABASE_URL")
-    if database_url:
-        run_store = PostgreSQLRunStore(database_url)
+    init_globals()
+
+    if isinstance(run_store, PostgreSQLRunStore):
         await run_store.initialize()
         logger.info("Initialized PostgreSQL run store")
-    else:
-        run_store = InMemoryRunStore()
-        logger.warning("Using in-memory run store (not for production)")
-
-    # Initialize Vertex AI client
-    use_mock = os.getenv("USE_MOCK_LLM", "false").lower() == "true"
-    if use_mock:
-        vertex_client = MockVertexAIClient()
-        logger.info("Using mock Vertex AI client")
-    else:
-        project_id = os.getenv("GCP_PROJECT_ID")
-        location = os.getenv("GCP_LOCATION", "us-central1")
-        if project_id:
-            vertex_client = VertexAIClient(project_id=project_id, location=location)
-            logger.info(f"Initialized Vertex AI client for project {project_id}")
-        else:
-            vertex_client = MockVertexAIClient()
-            logger.warning("No GCP_PROJECT_ID set, using mock client")
-
-    # Initialize loopback handler
-    loopback_handler = GatewayLoopbackHandler()
 
     yield
 
@@ -105,7 +111,7 @@ app.add_middleware(
 async def verify_tenant_credentials(
     authorization: str = Header(...),
     x_ghost_subject: str = Header(..., alias="X-Ghost-Subject"),
-) -> tuple[str, str]:
+) -> Tuple[str, str]:
     """
     Verify server-to-server credentials and extract tenant/subject.
 
@@ -121,6 +127,8 @@ async def verify_tenant_credentials(
     valid_keys = {
         os.getenv("TENANT_API_KEY_1", "test-key-1"): "tenant_1",
         os.getenv("TENANT_API_KEY_2", "test-key-2"): "tenant_2",
+        os.getenv("GHOST_CURSOR_API_KEY", "test-key-shophive-demo"): "shophive_demo",
+        "test-key-shophive-demo": "shophive_demo",
     }
 
     tenant_id = valid_keys.get(api_key)
@@ -182,7 +190,7 @@ async def health_check():
 async def create_run(
     request: HostedCreateRunRequest,
     http_request: Request,
-    tenant_subject: tuple[str, str] = Depends(verify_tenant_credentials),
+    tenant_subject: Tuple[str, str] = Depends(verify_tenant_credentials),
 ):
     """
     Create a new run or deduplicate existing one.
@@ -191,6 +199,7 @@ async def create_run(
     reject_origin_requests(http_request)
 
     tenant_id, subject = tenant_subject
+    init_globals()
 
     try:
         # Check for deduplication
@@ -214,22 +223,28 @@ async def create_run(
         # Load brain content (passed from gateway)
         brain_content = request.brain
 
-        # Get available targets
-        available_targets = request.context.get("availableTargets", [])
+        # Get available targets and context dict
+        context_dict = (
+            request.context.model_dump()
+            if hasattr(request.context, "model_dump")
+            else request.context
+        )
+        available_targets = context_dict.get("availableTargets", [])
 
         # Create agent with brain context
         agent = create_ghost_agent(
             brain_content=brain_content,
             available_targets=available_targets,
-            current_context=request.context,
+            current_context=context_dict,
             customer_backend_tools=request.tools,
         )
 
         # Run initial planning
+        run_state.revision = 0
         response = await _run_agent_turn(agent, run_state, request.message)
+        response.revision = 0
 
         # Update run state with response
-        run_state.revision = 0
         run_state.status = response.status
         run_state.latest_reply = response.reply
         run_state.history.append({
@@ -256,7 +271,7 @@ async def continue_run(
     run_id: str,
     request: HostedContinueRunRequest,
     http_request: Request,
-    tenant_subject: tuple[str, str] = Depends(verify_tenant_credentials),
+    tenant_subject: Tuple[str, str] = Depends(verify_tenant_credentials),
 ):
     """
     Continue an existing run with tool results, action results, or user answer.
@@ -264,6 +279,7 @@ async def continue_run(
     reject_origin_requests(http_request)
 
     tenant_id, subject = tenant_subject
+    init_globals()
 
     try:
         # Load run
@@ -289,6 +305,9 @@ async def continue_run(
                 raise HTTPException(status_code=409, detail="Event ID replay with different payload")
 
         # Process based on kind
+        target_revision = request.revision + 1
+        run_state.revision = target_revision
+        run_state.latest_kind = request.kind
         if request.kind == "tools":
             response = await _handle_tool_results(run_state, request.results)
         elif request.kind == "actions":
@@ -300,9 +319,9 @@ async def continue_run(
         else:
             raise HTTPException(status_code=400, detail=f"Unknown kind: {request.kind}")
 
+        response.revision = target_revision
+
         # Update run state
-        run_state.revision += 1
-        run_state.revision = request.revision + 1
         run_state.status = response.status
         run_state.latest_reply = response.reply
         run_state.latest_event_id = request.eventId
@@ -352,9 +371,10 @@ async def _run_agent_turn(agent: GhostAgent, run_state: RunState, user_message: 
 
 async def _handle_tool_results(
     run_state: RunState,
-    results: Optional[list[ToolCallResponse]],
+    results: Optional[List[ToolCallResponse]],
 ) -> HostedRunResponse:
     """Handle tool execution results from gateway"""
+    run_state.latest_tool_results = results or []
     # Reload agent with updated context
     agent = create_ghost_agent(
         brain_content=run_state.start_payload.get("brain", ""),
@@ -363,8 +383,6 @@ async def _handle_tool_results(
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 
-    # Add tool results to context and re-run
-    tool_results = results or []
     response = await _run_agent_turn(agent, run_state, "")
 
     return response
@@ -372,15 +390,21 @@ async def _handle_tool_results(
 
 async def _handle_action_results(
     run_state: RunState,
-    results: Optional[list[ToolCallResponse]],
-    updated_context: Optional[dict],
+    results: Optional[List[ToolCallResponse]],
+    updated_context: Optional[Any],
 ) -> HostedRunResponse:
     """Handle frontend action execution results"""
+    run_state.latest_action_results = results or []
+    context_dict = (
+        updated_context.model_dump()
+        if hasattr(updated_context, "model_dump")
+        else (updated_context or run_state.start_payload.get("context", {}))
+    )
     # Reload agent
     agent = create_ghost_agent(
         brain_content=run_state.start_payload.get("brain", ""),
         available_targets=run_state.start_payload.get("context", {}).get("availableTargets", []),
-        current_context=updated_context or run_state.start_payload.get("context", {}),
+        current_context=context_dict,
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 
@@ -392,13 +416,18 @@ async def _handle_action_results(
 async def _handle_user_answer(
     run_state: RunState,
     answer: Optional[str],
-    updated_context: Optional[dict],
+    updated_context: Optional[Any],
 ) -> HostedRunResponse:
     """Handle user answer to clarification question"""
+    context_dict = (
+        updated_context.model_dump()
+        if hasattr(updated_context, "model_dump")
+        else (updated_context or run_state.start_payload.get("context", {}))
+    )
     agent = create_ghost_agent(
         brain_content=run_state.start_payload.get("brain", ""),
         available_targets=run_state.start_payload.get("context", {}).get("availableTargets", []),
-        current_context=updated_context or run_state.start_payload.get("context", {}),
+        current_context=context_dict,
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 

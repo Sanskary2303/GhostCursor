@@ -1,5 +1,5 @@
 import { h, render } from 'preact';
-import type { PageContext, Action, ToolResult, Target } from './types';
+import type { PageContext, Action, ToolResult, Target, PublicResponse } from './types';
 import { ContextProvider } from './context/ContextProvider';
 import { createTransport, TransportManager, Transport } from './transport/Transport';
 import { ActionExecutor, ExecutionOptions } from './executor/ActionExecutor';
@@ -11,7 +11,7 @@ import { resolveTargetWithCascade, registerTarget } from './dom-utils';
 export interface GhostCursorSDK {
   dispose(): void;
   sendMessage(message: string): Promise<void>;
-  executeActions(actions: Action[]): Promise<ToolResult[]>;
+  executeActions(actions: Action[]): Promise<PublicResponse | null>;
   startTour(steps: any[]): Promise<void>;
   updateContext(context: Partial<PageContext>): void;
   getContext(): PageContext | null;
@@ -177,10 +177,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         rememberStatus(res);
         return res;
       },
-      onActionApproval: async (actions: any[]) => {
-        await executeActions(actions);
-        return true;
-      },
+      onActionApproval: (actions: any[]) => executeActions(actions),
     }),
     shadowRoot
   );
@@ -231,9 +228,6 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
           timestamp: new Date(),
           actions: response.actions,
         } as Message);
-      } else {
-        // Auto-execute
-        await executeActions(response.actions);
       }
     }
 
@@ -270,17 +264,12 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   /**
    * Execute approved actions
    */
-  async function executeActions(actions: Action[]): Promise<ToolResult[]> {
-    const results = await actionExecutor.execute(actions);
-
-    // Send results back to backend
-    if (currentRunId && results.results.length > 0) {
-      await transportManager.continue('actions', {
-        results: results.results,
-      });
-    }
-
-    return results.results;
+  async function executeActions(actions: Action[]): Promise<PublicResponse | null> {
+    const execution = await actionExecutor.execute(actions);
+    if (isDisposed || !currentRunId) return null;
+    const res = await transportManager.continue('actions', { results: execution.results });
+    rememberStatus(res);
+    return res;
   }
 
   /**

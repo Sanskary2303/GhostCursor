@@ -48,6 +48,7 @@ export type TargetOperation = 'click' | 'fill' | 'select' | 'toggle' | 'navigate
 export type ActionType = 'navigate' | 'click' | 'fill_input' | 'select_option' | 'toggle_switch' | 'guided_tour' | 'ask_clarification';
 
 export interface Action {
+  id?: string;
   type: ActionType;
   target_id?: string;
   value?: string | number | boolean;
@@ -57,6 +58,7 @@ export interface Action {
   steps?: TourStep[];
   question?: string;
   options?: string[];
+  option?: string;
 }
 
 export interface TourStep {

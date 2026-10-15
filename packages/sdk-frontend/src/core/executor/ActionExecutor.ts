@@ -374,37 +374,18 @@ export class ActionExecutor {
    * Execute an array of actions sequentially
    */
   async execute(actions: Action[]): Promise<ExecutionResult> {
-    if (this.options.requireApproval && actions.length > 0) {
-      // In a real implementation, this would show the approval UI
-      // For now, we'll assume approval is granted
-      console.log('[ActionExecutor] Actions require approval - auto-approving for demo');
-    }
-
     this.abortController = new AbortController();
     const results: ToolResult[] = [];
-
+    const skipRest = (from: number, reason: string) => {
+      for (const rest of actions.slice(from)) results.push({ id: rest.id ?? crypto.randomUUID(), ok: false, error: reason });
+    };
     for (let i = 0; i < actions.length; i++) {
-      const action = actions[i];
-
-      // Check for abort
-      if (this.abortController.signal.aborted) {
-        results.push({
-          id: crypto.randomUUID(),
-          ok: false,
-          error: 'Execution cancelled',
-        });
-        break;
-      }
-
-      const result = await executeAction(action, this.options);
+      if (this.abortController.signal.aborted) { skipRest(i, 'cancelled by user'); return { success: false, results, error: 'cancelled' }; }
+      const result = await executeAction(actions[i], this.options);
+      result.id = actions[i].id ?? result.id;
       results.push(result);
-
-      // Stop on failure
-      if (!result.ok) {
-        return { success: false, results, error: result.error };
-      }
+      if (!result.ok) { skipRest(i + 1, 'skipped: an earlier step failed'); return { success: false, results, error: result.error }; }
     }
-
     return { success: true, results };
   }
 

@@ -24,7 +24,7 @@ export interface ChatWidgetProps {
   };
   requireApprovalForActions: boolean;
   onSendMessage: (message: string, context: any) => Promise<any>;
-  onActionApproval: (actions: any[]) => Promise<boolean>;
+  onActionApproval: (actions: any[]) => Promise<any>;
   initialContext: any;
 }
 
@@ -97,6 +97,18 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     return newMessage;
   };
 
+  private applyResponse = (messageId: string, response: any) => {
+    this.setState(prev => ({
+      messages: prev.messages.map(m => m.id === messageId
+        ? { ...m, content: response.reply, isStreaming: false, questions: response.questions?.length ? response.questions : undefined }
+        : m),
+    }));
+    if (response.actions?.length) {
+      if (this.props.requireApprovalForActions) this.setState({ showActionApproval: true, pendingActions: response.actions });
+      else void this.executeActions(response.actions);
+    }
+  };
+
   private handleSendMessage = async (e: Event) => {
     e.preventDefault();
     const { inputValue, isLoading } = this.state;
@@ -114,37 +126,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     try {
       this.abortController = new AbortController();
       const response = await this.props.onSendMessage(message, this.state.context);
-
-      // Update with actual response
-      this.setState(prev => ({
-        messages: prev.messages.map(m =>
-          m.id === assistantMsg.id ? { ...m, content: response.reply, isStreaming: false } : m
-        ),
-        context: response.context || prev.context,
-      }));
-
-      // Handle questions (clarifications)
-      if (response.questions && response.questions.length > 0) {
-        this.setState(prev => ({
-          messages: prev.messages.map(m =>
-            m.id === assistantMsg.id
-              ? { ...m, questions: response.questions }
-              : m
-          ),
-        }));
-      }
-
-      // Handle actions (require approval)
-      if (response.actions && response.actions.length > 0) {
-        if (this.props.requireApprovalForActions) {
-          this.setState({
-            showActionApproval: true,
-            pendingActions: response.actions,
-          });
-        } else {
-          await this.executeActions(response.actions);
-        }
-      }
+      this.applyResponse(assistantMsg.id, response);
     } catch (error) {
       this.setState(prev => ({
         messages: prev.messages.map(m =>
@@ -161,19 +143,13 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
   private executeActions = async (actions: any[]) => {
     this.setState({ isLoading: true });
+    const statusMsg = this.addMessage({ role: 'assistant', content: 'Running the approved steps...', isStreaming: true });
     try {
-      const results = [];
-      for (const action of actions) {
-        // This would delegate to ActionExecutor
-        // For now, simulate execution
-        await new Promise(resolve => setTimeout(resolve, 500));
-        results.push({ id: crypto.randomUUID(), ok: true, output: { executed: action } });
-      }
-
-      // Send results back
-      await this.props.onSendMessage('__ACTION_RESULTS__', { actionResults: results });
+      const response = await this.props.onActionApproval(actions);
+      if (response) this.applyResponse(statusMsg.id, response);
     } catch (error) {
-      console.error('[ChatWidget] Action execution failed:', error);
+      const text = error instanceof Error ? error.message : 'Unknown error';
+      this.setState(prev => ({ messages: prev.messages.map(m => m.id === statusMsg.id ? { ...m, content: `Error: ${text}`, isStreaming: false } : m) }));
     } finally {
       this.setState({ isLoading: false });
     }
@@ -197,12 +173,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
     try {
       const response = await this.props.onSendMessage(message, this.state.context);
-      this.setState(prev => ({
-        messages: prev.messages.map(m =>
-          m.id === assistantMsg.id ? { ...m, content: response.reply, isStreaming: false } : m
-        ),
-        context: response.context || prev.context,
-      }));
+      this.applyResponse(assistantMsg.id, response);
     } catch (error) {
       this.setState(prev => ({
         messages: prev.messages.map(m =>

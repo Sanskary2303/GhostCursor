@@ -8,6 +8,8 @@ import hmac
 import hashlib
 import json
 import time
+import uuid
+import httpx
 from pydantic import BaseModel, Field
 
 from ghost_cursor import (
@@ -15,6 +17,7 @@ from ghost_cursor import (
     InMemoryChatStore,
     BrainLoader,
     ToolRegistry,
+    GatewayError,
 )
 from ghost_cursor.proxy import GatewayLoopback, GhostCursorConfig
 from ghost_cursor.tools import BackendTool, FrontendActionTool
@@ -234,3 +237,121 @@ async def test_tool_registry():
     # Test duplicate registration error
     with pytest.raises(ValueError, match="already registered"):
         registry.register(tool)
+
+
+@pytest.mark.asyncio
+async def test_kind_tools_rejected():
+    """Browser sending kind: 'tools' is rejected with 400 invalid_request"""
+    backend = GhostCursorBackend()
+    payload = {
+        "command": "continue",
+        "protocolVersion": "1",
+        "runId": str(uuid.uuid4()),
+        "eventId": str(uuid.uuid4()),
+        "revision": 0,
+        "kind": "tools",
+        "results": [],
+    }
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn(payload, "user_123")
+    assert exc_info.value.status == 400
+    assert exc_info.value.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_extra_brain_field_rejected():
+    """Browser sending extra fields like brain is rejected with 400 invalid_request"""
+    backend = GhostCursorBackend()
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Hello",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+        "brain": "injected content",
+    }
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn(payload, "user_123")
+    assert exc_info.value.status == 400
+    assert exc_info.value.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_start_without_request_id_rejected():
+    """Start command without requestId is rejected with 400 invalid_request"""
+    backend = GhostCursorBackend()
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "message": "Hello",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn(payload, "user_123")
+    assert exc_info.value.status == 400
+    assert exc_info.value.code == "invalid_request"
+
+
+@pytest.mark.asyncio
+async def test_upstream_409_conflict():
+    """Upstream 409 status code maps to GatewayError(409, 'conflict')"""
+    backend = GhostCursorBackend()
+    backend._http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(409, json={}))
+    )
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Hello",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn(payload, "user_123")
+    assert exc_info.value.status == 409
+    assert exc_info.value.code == "conflict"
+
+
+@pytest.mark.asyncio
+async def test_fastapi_router_gateway_error_mapping():
+    """Test SDK router handles GatewayError and invalid JSON with proper headers"""
+    from fastapi import FastAPI
+    from httpx import AsyncClient, ASGITransport
+    from ghost_cursor.fastapi import create_ghost_cursor_router
+
+    backend = GhostCursorBackend()
+    app = FastAPI()
+    router = create_ghost_cursor_router(
+        backend=backend,
+        user_id_extractor=lambda r: "user_test",
+    )
+    app.include_router(router)
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Invalid JSON -> 400 invalid_json
+        res = await client.post(
+            "/api/ghost-cursor",
+            content=b"invalid json body",
+            headers={"Content-Type": "application/json"},
+        )
+        assert res.status_code == 400
+        assert res.json() == {"error": "invalid_json"}
+        assert res.headers.get("Cache-Control") == "no-store"
+
+        # 2. kind: tools -> 400 invalid_request
+        res = await client.post(
+            "/api/ghost-cursor",
+            json={
+                "command": "continue",
+                "protocolVersion": "1",
+                "runId": str(uuid.uuid4()),
+                "eventId": str(uuid.uuid4()),
+                "revision": 0,
+                "kind": "tools",
+                "results": [],
+            },
+        )
+        assert res.status_code == 400
+        assert res.json() == {"error": "invalid_request"}
+        assert res.headers.get("Cache-Control") == "no-store"
+

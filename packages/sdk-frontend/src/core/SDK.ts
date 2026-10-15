@@ -171,7 +171,12 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       requireApprovalForActions,
       initialContext: { page: getPage(), values: {}, availableTargets: [] },
       onSendMessage: async (msg: string, ctx: any) => {
-        const pageContext = contextProvider.getContext() || { page: getPage(), values: {}, availableTargets: [] };
+        const rawCtx = contextProvider.getContext();
+        const pageContext = {
+          page: rawCtx?.page ?? getPage(),
+          values: rawCtx?.values ?? {},
+          availableTargets: rawCtx?.availableTargets ?? [],
+        };
         const res = currentRunId && lastStatus === 'awaiting_answer'
           ? await transportManager.continue('answer', { answer: msg })
           : await transportManager.start(msg, pageContext);
@@ -245,15 +250,16 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   async function sendMessage(message: string): Promise<void> {
     if (isDisposed) throw new Error('SDK is disposed');
 
-    const context = contextProvider.getContext();
-    if (!context) {
+    let rawCtx = contextProvider.getContext();
+    if (!rawCtx) {
       contextProvider.captureContext();
+      rawCtx = contextProvider.getContext();
     }
 
-    const pageContext = contextProvider.getContext() || {
-      page: getPage(),
-      values: {},
-      availableTargets: [],
+    const pageContext = {
+      page: rawCtx?.page ?? getPage(),
+      values: rawCtx?.values ?? {},
+      availableTargets: rawCtx?.availableTargets ?? [],
     };
 
     const res = currentRunId && lastStatus === 'awaiting_answer'

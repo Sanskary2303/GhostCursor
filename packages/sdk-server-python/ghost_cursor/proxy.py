@@ -12,18 +12,74 @@ import json
 import time
 import uuid
 import logging
-from typing import Any, Callable, Dict, List, Optional, Awaitable
+from typing import Any, Callable, Dict, List, Literal, Optional, Union, Awaitable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
 import httpx
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import (
+    BaseModel,
+    Field,
+    ConfigDict,
+    StrictBool,
+    StrictFloat,
+    StrictInt,
+    StrictStr,
+    ValidationError,
+)
 
 from .storage import ChatStore
 from .brain_loader import BrainLoader
 from .tools import Tool, ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Gateway Error & Browser Protocol Models
+# ============================================================================
+
+class GatewayError(Exception):
+    def __init__(self, status: int, code: str):
+        super().__init__(code)
+        self.status, self.code = status, code
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class BrowserContext(_Strict):
+    page: str = Field(default="unknown", max_length=200)
+    values: Dict[str, Union[StrictBool, StrictInt, StrictFloat, StrictStr]] = Field(default_factory=dict, max_length=100)
+    availableTargets: List[str] = Field(default_factory=list, max_length=100)
+
+
+class BrowserStart(_Strict):
+    command: Literal["start"]
+    protocolVersion: Literal["1"] = "1"
+    requestId: uuid.UUID
+    message: str = Field(min_length=1, max_length=6000)
+    context: BrowserContext = Field(default_factory=BrowserContext)
+
+
+class BrowserResult(_Strict):
+    id: str = Field(min_length=1, max_length=120)
+    ok: bool
+    output: Optional[Any] = None
+    error: Optional[str] = Field(default=None, max_length=500)
+
+
+class BrowserContinue(_Strict):
+    command: Literal["continue"]
+    protocolVersion: Literal["1"] = "1"
+    runId: uuid.UUID
+    eventId: uuid.UUID
+    revision: int = Field(ge=0)
+    kind: Literal["actions", "answer", "cancel"]
+    results: List[BrowserResult] = Field(default_factory=list, max_length=12)
+    answer: Optional[str] = Field(default=None, max_length=6000)
+    context: Optional[BrowserContext] = None
 
 
 # ============================================================================
@@ -356,29 +412,27 @@ class GhostCursorBackend:
         execute any local tools, and return public response.
         Supports both new runs (command: 'start') and continuation (command: 'continue').
         """
-        is_continue = payload.get("command") == "continue" or bool(
-            payload.get("runId") and (payload.get("kind") or "results" in payload or "answer" in payload)
-        )
+        if not isinstance(payload, dict):
+            raise GatewayError(400, "invalid_request")
 
-        if not is_continue:
-            if not payload.get("message"):
-                raise ValueError("Message is required for new run")
+        try:
+            if payload.get("command") == "start":
+                req_model = BrowserStart.model_validate(payload)
+            else:
+                req_model = BrowserContinue.model_validate(payload)
+        except ValidationError:
+            raise GatewayError(400, "invalid_request")
 
+        if isinstance(req_model, BrowserStart):
             # Load brain context
-            page = current_page or payload.get("context", {}).get("page", "unknown")
+            page = current_page or req_model.context.page
             brain_content = self.brain_loader.load_context(page)
 
-            # Get available targets from context
-            available_targets = payload.get("context", {}).get("availableTargets", [])
-
-            # Build request for Ghost Cursor Cloud
-            request_id = payload.get("requestId") or str(uuid.uuid4())
-
             hosted_request = HostedRunRequest(
-                protocolVersion=payload.get("protocolVersion", "1"),
-                requestId=request_id,
-                message=payload["message"],
-                context=payload.get("context", {}),
+                protocolVersion=req_model.protocolVersion,
+                requestId=str(req_model.requestId),
+                message=req_model.message,
+                context=req_model.context.model_dump(),
                 brain=brain_content,
                 capabilities=[],
                 tools=self.get_tool_declarations(),
@@ -387,23 +441,23 @@ class GhostCursorBackend:
             # Send to Ghost Cursor Cloud
             response = await self._call_hosted_api(hosted_request, user_id)
         else:
-            run_id = payload.get("runId")
-            if not run_id:
-                raise ValueError("runId is required for continue")
-
-            event_id = payload.get("eventId") or str(uuid.uuid4())
-            revision = payload.get("revision", 0)
-            kind = payload.get("kind") or ("answer" if payload.get("answer") else "actions")
-
             continue_request = HostedRunRequest(
-                protocolVersion=payload.get("protocolVersion", "1"),
-                runId=run_id,
-                eventId=event_id,
-                revision=revision,
-                kind=kind,
-                results=payload.get("results"),
-                answer=payload.get("answer"),
-                context=payload.get("context", {}),
+                protocolVersion=req_model.protocolVersion,
+                runId=str(req_model.runId),
+                eventId=str(req_model.eventId),
+                revision=req_model.revision,
+                kind=req_model.kind,
+                results=[
+                    ToolCallResponse(
+                        id=r.id,
+                        ok=r.ok,
+                        output=r.output,
+                        error=r.error,
+                    )
+                    for r in req_model.results
+                ] if req_model.results else None,
+                answer=req_model.answer,
+                context=req_model.context.model_dump() if req_model.context is not None else {},
             )
             response = await self._call_hosted_api(continue_request, user_id)
 
@@ -428,6 +482,9 @@ class GhostCursorBackend:
                 results=tool_results,
             )
             response = await self._call_hosted_api(continue_request, user_id)
+
+        if response.toolCalls or response.status == "awaiting_tools":
+            raise GatewayError(502, "tool_round_limit")
 
         # Persist chat history if store available
         if self.chat_store:
@@ -472,13 +529,21 @@ class GhostCursorBackend:
         else:
             post_data = request.model_dump(exclude_none=True)
 
-        response = await client.post(
-            url,
-            json=post_data,
-            headers=headers,
-        )
+        try:
+            response = await client.post(
+                url,
+                json=post_data,
+                headers=headers,
+            )
+        except httpx.HTTPError:
+            raise GatewayError(502, "upstream_unavailable")
 
-        response.raise_for_status()
+        if response.status_code >= 400:
+            error_map = {404: "run_not_found", 409: "conflict", 410: "run_expired"}
+            if response.status_code in error_map:
+                raise GatewayError(response.status_code, error_map[response.status_code])
+            raise GatewayError(502, "upstream_error")
+
         data = response.json()
 
         # Validate response size
@@ -591,6 +656,10 @@ class GhostCursorBackend:
 
     def _project_public_response(self, response: HostedRunResponse) -> Dict[str, Any]:
         """Project internal response to public envelope (exclude internals)"""
+        allowed = {"awaiting_actions", "awaiting_answer", "completed", "failed", "cancelled"}
+        if response.status not in allowed:
+            raise GatewayError(502, "bad_upstream_status")
+
         return {
             "protocolVersion": response.protocolVersion,
             "runId": response.runId,

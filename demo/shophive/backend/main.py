@@ -14,13 +14,17 @@ backend_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(backend_dir))
 sys.path.insert(0, str(backend_dir.parent.parent / "packages" / "sdk-server-python"))
 
+import logging
 import secrets
 from fastapi import FastAPI, Depends, Request, HTTPException
+from fastapi.responses import JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
+
+logger = logging.getLogger(__name__)
 
 # Import Ghost Cursor SDK
 try:
-    from ghost_cursor import GhostCursorBackend, InMemoryChatStore, SQLAlchemyChatStore
+    from ghost_cursor import GhostCursorBackend, InMemoryChatStore, SQLAlchemyChatStore, GatewayError
 except ImportError:
     print("Error: ghost-cursor package not found. Install with: pip install ghost-cursor")
     sys.exit(1)
@@ -161,8 +165,31 @@ ghost_router = APIRouter(prefix="/api/ghost-cursor", tags=["ghost-cursor"])
 @ghost_router.post("/continue", dependencies=[Depends(same_origin)])
 async def handle_ghost_turn(request: Request, user_id: str = Depends(require_user)):
     """Handle Ghost Cursor conversation turns"""
-    payload = await request.json()
-    return await ghost.handle_turn(payload=payload, user_id=user_id)
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse(
+            {"error": "invalid_json"},
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+
+    try:
+        data = await ghost.handle_turn(payload=payload, user_id=user_id)
+        return JSONResponse(data)
+    except GatewayError as e:
+        return JSONResponse(
+            {"error": e.code},
+            status_code=e.status,
+            headers={"Cache-Control": "no-store"},
+        )
+    except Exception:
+        logger.exception("Internal error in handle_ghost_turn")
+        return JSONResponse(
+            {"error": "internal_error"},
+            status_code=500,
+            headers={"Cache-Control": "no-store"},
+        )
 
 @ghost_router.get("/sessions")
 async def list_sessions(user_id: str = Depends(require_user)):

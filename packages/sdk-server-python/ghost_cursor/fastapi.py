@@ -4,15 +4,18 @@ FastAPI Integration for Ghost Cursor Backend SDK
 Provides ready-to-use router and dependency injection for FastAPI applications.
 """
 
+import logging
 from typing import Any, Callable, Dict, List, Optional
 from functools import wraps
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from .proxy import GhostCursorBackend, GhostCursorProxy
+from .proxy import GhostCursorBackend, GhostCursorProxy, GatewayError
 from .storage import SQLAlchemyChatStore, ChatStore
+
+logger = logging.getLogger(__name__)
 
 
 # ============================================================================
@@ -74,24 +77,12 @@ class GhostCursorDependencies:
     def __init__(
         self,
         backend: GhostCursorBackend,
+        user_id_extractor: Callable[[Request], str],
         chat_store: Optional[ChatStore] = None,
-        user_id_extractor: Optional[Callable[[Request], str]] = None,
     ):
         self.backend = backend
         self.chat_store = chat_store
-        self.user_id_extractor = user_id_extractor or self._default_user_extractor
-
-    @staticmethod
-    def _default_user_extractor(request: Request) -> str:
-        """Default user ID extractor - assumes request.state.user exists"""
-        # In production, integrate with your auth system
-        return getattr(request.state, "user_id", "anonymous")
-
-
-def get_ghost_dependencies() -> GhostCursorDependencies:
-    """Dependency provider - override in your app"""
-    # This will be set by the integration
-    return GhostCursorDependencies(backend=None)  # type: ignore
+        self.user_id_extractor = user_id_extractor
 
 
 # ============================================================================
@@ -100,8 +91,8 @@ def get_ghost_dependencies() -> GhostCursorDependencies:
 
 def create_ghost_cursor_router(
     backend: GhostCursorBackend,
+    user_id_extractor: Callable[[Request], str],
     chat_store: Optional[ChatStore] = None,
-    user_id_extractor: Optional[Callable[[Request], str]] = None,
     prefix: str = "/api/ghost-cursor",
     tags: List[str] = ["ghost-cursor"],
 ) -> APIRouter:
@@ -110,8 +101,8 @@ def create_ghost_cursor_router(
 
     Args:
         backend: GhostCursorBackend instance
-        chat_store: Optional ChatStore for session persistence
         user_id_extractor: Function to extract user_id from request
+        chat_store: Optional ChatStore for session persistence
         prefix: URL prefix for routes
         tags: OpenAPI tags
 
@@ -121,17 +112,13 @@ def create_ghost_cursor_router(
 
     router = APIRouter(prefix=prefix, tags=tags)
 
-    # Create proxy for handling requests
-    proxy = GhostCursorProxy(backend)
-
     # Dependency to get user ID
     def get_user_id(request: Request) -> str:
-        if user_id_extractor:
-            return user_id_extractor(request)
-        return GhostCursorDependencies._default_user_extractor(request)
+        return user_id_extractor(request)
 
     @router.post("", response_model=GhostCursorResponse)
     @router.post("/run", response_model=GhostCursorResponse)
+    @router.post("/continue", response_model=GhostCursorResponse)
     async def handle_ghost_turn(
         http_request: Request,
         user_id: str = Depends(get_user_id),
@@ -141,9 +128,17 @@ def create_ghost_cursor_router(
         Proxies to Ghost Cursor Cloud via server-to-server HTTPS.
         """
         try:
-            payload = await http_request.json()
+            try:
+                payload = await http_request.json()
+            except Exception:
+                return JSONResponse(
+                    {"error": "invalid_json"},
+                    status_code=400,
+                    headers={"Cache-Control": "no-store"},
+                )
+
             current_page = None
-            if isinstance(payload.get("context"), dict):
+            if isinstance(payload, dict) and isinstance(payload.get("context"), dict):
                 current_page = payload["context"].get("page")
 
             response = await backend.handle_turn(
@@ -152,31 +147,19 @@ def create_ghost_cursor_router(
                 current_page=current_page,
             )
             return JSONResponse(content=response)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
-
-    @router.post("/continue", response_model=GhostCursorResponse)
-    async def continue_ghost_turn(
-        request: GhostCursorContinueRequest,
-        http_request: Request,
-        user_id: str = Depends(get_user_id),
-    ):
-        """Continue an existing Ghost Cursor run"""
-        try:
-            payload = request.model_dump(exclude_none=True)
-            payload["command"] = "continue"
-            current_page = None
-            if isinstance(payload.get("context"), dict):
-                current_page = payload["context"].get("page")
-
-            response = await backend.handle_turn(
-                payload=payload,
-                user_id=user_id,
-                current_page=current_page,
+        except GatewayError as e:
+            return JSONResponse(
+                {"error": e.code},
+                status_code=e.status,
+                headers={"Cache-Control": "no-store"},
             )
-            return JSONResponse(content=response)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+        except Exception:
+            logger.exception("Internal error in handle_ghost_turn")
+            return JSONResponse(
+                {"error": "internal_error"},
+                status_code=500,
+                headers={"Cache-Control": "no-store"},
+            )
 
     @router.get("/sessions", response_model=List[SessionResponse])
     async def list_sessions(
@@ -209,28 +192,43 @@ def create_ghost_cursor_router(
         user_id: str = Depends(get_user_id),
     ):
         """Create a new chat session"""
-        active_store = chat_store or getattr(backend, "chat_store", None)
-        if not active_store:
-            raise HTTPException(status_code=503, detail="Chat store not configured")
+        try:
+            active_store = chat_store or getattr(backend, "chat_store", None)
+            if not active_store:
+                raise HTTPException(status_code=503, detail="Chat store not configured")
 
-        # Get tenant from backend config
-        tenant_id = backend.config.tenant_id if hasattr(backend, 'config') else "default"
+            tenant_id = backend.config.tenant_id if hasattr(backend, 'config') else "default"
 
-        session = await active_store.create_session(
-            user_id=user_id,
-            tenant_id=tenant_id,
-            title=request.title,
-        )
+            session = await active_store.create_session(
+                user_id=user_id,
+                tenant_id=tenant_id,
+                title=request.title,
+            )
 
-        return SessionResponse(
-            session_id=session.session_id,
-            tenant_id=session.tenant_id,
-            user_id=session.user_id,
-            title=session.title,
-            summary=session.summary,
-            created_at=session.created_at.isoformat(),
-            updated_at=session.updated_at.isoformat(),
-        )
+            return SessionResponse(
+                session_id=session.session_id,
+                tenant_id=session.tenant_id,
+                user_id=session.user_id,
+                title=session.title,
+                summary=session.summary,
+                created_at=session.created_at.isoformat(),
+                updated_at=session.updated_at.isoformat(),
+            )
+        except GatewayError as e:
+            return JSONResponse(
+                {"error": e.code},
+                status_code=e.status,
+                headers={"Cache-Control": "no-store"},
+            )
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Internal error in create_session")
+            return JSONResponse(
+                {"error": "internal_error"},
+                status_code=500,
+                headers={"Cache-Control": "no-store"},
+            )
 
     @router.get("/sessions/{session_id}/messages", response_model=List[Dict[str, Any]])
     async def get_session_messages(
@@ -259,41 +257,6 @@ def create_ghost_cursor_router(
             for m in messages
         ]
 
-    @router.websocket("/ws")
-    async def ghost_cursor_websocket(
-        websocket: WebSocket,
-        user_id: str = Depends(get_user_id),
-    ):
-        """WebSocket endpoint for real-time communication"""
-        await websocket.accept()
-
-        try:
-            while True:
-                data = await websocket.receive_json()
-
-                response = await backend.handle_turn(
-                    payload=data,
-                    user_id=user_id,
-                    current_page=data.get("context", {}).get("page") if isinstance(data.get("context"), dict) else None,
-                )
-
-                await websocket.send_json(response)
-
-        except WebSocketDisconnect:
-            pass
-        except Exception as e:
-            try:
-                await websocket.send_json({"error": str(e), "status": "failed"})
-            except Exception:
-                pass
-
-        except WebSocketDisconnect:
-            pass
-        except Exception as e:
-            await websocket.send_json({"error": str(e)})
-        finally:
-            await websocket.close()
-
     return router
 
 
@@ -309,8 +272,8 @@ GhostCursorFastAPI = GhostCursorBackend
 def integrate_ghost_cursor(
     app: Any,  # FastAPI app
     backend: GhostCursorBackend,
+    user_id_extractor: Callable[[Request], str],
     chat_store: Optional[ChatStore] = None,
-    user_id_extractor: Optional[Callable[[Request], str]] = None,
     prefix: str = "/api/ghost-cursor",
 ):
     """
@@ -326,12 +289,12 @@ def integrate_ghost_cursor(
             brain_dir="./brain",
         )
 
-        integrate_ghost_cursor(app, backend)
+        integrate_ghost_cursor(app, backend, user_id_extractor=my_user_extractor)
     """
     router = create_ghost_cursor_router(
         backend=backend,
-        chat_store=chat_store,
         user_id_extractor=user_id_extractor,
+        chat_store=chat_store,
         prefix=prefix,
     )
     app.include_router(router)

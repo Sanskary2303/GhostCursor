@@ -5,7 +5,7 @@ A secure gateway proxy for integrating Ghost Cursor Cloud with customer backends
 Provides FastAPI, Flask, and Django integrations with automatic chat history persistence.
 """
 
-from .proxy import GhostCursorBackend, GhostCursorProxy
+from .proxy import GhostCursorBackend, GhostCursorProxy, GatewayError
 from .storage import SQLAlchemyChatStore, InMemoryChatStore, ChatStore
 from .brain_loader import BrainLoader
 from .tools import Tool, ToolRegistry
@@ -26,6 +26,7 @@ __version__ = "0.1.0"
 __all__ = [
     "GhostCursorBackend",
     "GhostCursorProxy",
+    "GatewayError",
     "SQLAlchemyChatStore",
     "InMemoryChatStore",
     "ChatStore",

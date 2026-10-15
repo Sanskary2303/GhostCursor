@@ -1,0 +1,43 @@
+{
+  "name": "ghost-cursor",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Ghost Cursor - Application-Aware Autonomous AI Co-pilot as a Service",
+  "scripts": {
+    "install:all": "npm ci",
+    "build:all": "npm run build --workspaces",
+    "test:all": "npm run test --workspaces",
+    "lint:all": "npm run lint --workspaces",
+    "typecheck:all": "npm run typecheck --workspaces",
+    "dev:sdk": "npm run dev --workspace=packages/sdk-frontend",
+    "dev:shophive:frontend": "npm run dev --workspace=demo/shophive/frontend",
+    "dev:shophive:backend": "cd demo/shophive/backend && uvicorn main:app --reload --port 8081",
+    "schemas": "npm run generate:schemas --workspace=packages/sdk-frontend",
+    "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist demo/*/frontend/node_modules demo/*/frontend/dist services/orchestrator/venv"
+  },
+  "workspaces": [
+    "packages/*",
+    "demo/*/frontend"
+  ],
+  "engines": {
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
+  },
+  "packageManager": "npm@10.8.1",
+  "keywords": [
+    "ghost-cursor",
+    "ai-assistant",
+    "co-pilot",
+    "dom-automation",
+    "google-adk",
+    "vertex-ai"
+  ],
+  "author": "Ghost Cursor Team",
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5",
+    "eslint": "^9.9.0",
+    "@types/node": "^22.5.0"
+  }
+}

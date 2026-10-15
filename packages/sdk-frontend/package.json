@@ -1,0 +1,59 @@
+{
+  "name": "@ghost-cursor/sdk",
+  "version": "0.1.0",
+  "description": "Ghost Cursor Frontend SDK - Framework-neutral DOM executor, chat widget, AI cursor, and tour overlay",
+  "type": "module",
+  "main": "dist/ghost-cursor.es.js",
+  "module": "dist/ghost-cursor.es.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/ghost-cursor.es.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/ghost-cursor.es.js"
+    },
+    "./react": {
+      "import": "./dist/ghost-cursor.es.js",
+      "types": "./dist/index.d.ts",
+      "default": "./dist/ghost-cursor.es.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src --ext ts,tsx",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-dom": ">=18.0.0"
+  },
+  "dependencies": {
+    "preact": "^10.19.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "typescript": "^5.5.4",
+    "vite": "^5.4.2",
+    "vite-plugin-dts": "^4.0.2",
+    "vitest": "^2.0.5",
+    "eslint": "^9.9.0"
+  },
+  "keywords": [
+    "ghost-cursor",
+    "sdk",
+    "ai-assistant",
+    "dom-automation",
+    "chat-widget",
+    "shadow-dom"
+  ],
+  "author": "Ghost Cursor Team",
+  "license": "MIT"
+}

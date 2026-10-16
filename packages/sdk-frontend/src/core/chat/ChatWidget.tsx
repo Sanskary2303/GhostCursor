@@ -24,7 +24,9 @@ export interface ChatWidgetProps {
   };
   requireApprovalForActions: boolean;
   onSendMessage: (message: string, context: any) => Promise<any>;
-  onActionApproval: (actions: any[]) => Promise<any>;
+  onActionApproval: (actions: any[], token?: string) => Promise<any>;
+  onCancelApproval?: () => Promise<any>;
+  onStop?: () => void;
   initialContext: any;
 }
 
@@ -33,8 +35,11 @@ export interface ChatWidgetState {
   messages: Message[];
   inputValue: string;
   isLoading: boolean;
+  isExecutingActions: boolean;
   showActionApproval: boolean;
   pendingActions: any[];
+  approvalToken: string | null;
+  unreadCount: number;
   context: any;
   error: string | null;
 }
@@ -45,8 +50,11 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     messages: [] as Message[],
     inputValue: '',
     isLoading: false,
+    isExecutingActions: false,
     showActionApproval: false,
     pendingActions: [] as any[],
+    approvalToken: null,
+    unreadCount: 0,
     context: this.props.initialContext,
     error: null as string | null,
   };
@@ -54,14 +62,27 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private messagesEndRef = createRef<HTMLDivElement>();
   private inputRef = createRef<HTMLTextAreaElement>();
   private abortController: AbortController | null = null;
+  private isStoppedByUser = false;
 
   componentDidMount() {
     this.scrollToBottom();
     this.setupResizeListener();
+    window.addEventListener('keydown', this.handleKeyDown);
   }
 
   componentWillUnmount() {
     this.cleanup();
+  }
+
+  componentDidUpdate(_prevProps: ChatWidgetProps, prevState: ChatWidgetState) {
+    if (!prevState.isOpen && this.state.isOpen) {
+      if (this.state.unreadCount > 0) {
+        this.setState({ unreadCount: 0 });
+      }
+      setTimeout(() => {
+        this.inputRef.current?.focus();
+      }, 50);
+    }
   }
 
   private setupResizeListener() {
@@ -72,16 +93,24 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.forceUpdate();
   };
 
+  private handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === 'Escape' && this.state.isOpen) {
+      this.setState({ isOpen: false });
+    }
+  };
+
   private cleanup() {
     window.removeEventListener('resize', this.handleResize);
+    window.removeEventListener('keydown', this.handleKeyDown);
     if (this.abortController) {
       this.abortController.abort();
     }
   }
 
   private scrollToBottom = () => {
+    const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setTimeout(() => {
-      this.messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      this.messagesEndRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
     }, 100);
   };
 
@@ -91,9 +120,14 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       id: crypto.randomUUID(),
       timestamp: new Date(),
     };
-    this.setState(prev => ({
-      messages: [...prev.messages, newMessage],
-    }), () => this.scrollToBottom());
+    this.setState(prev => {
+      const isAssistant = message.role === 'assistant';
+      const unreadCount = (!prev.isOpen && isAssistant) ? prev.unreadCount + 1 : prev.unreadCount;
+      return {
+        messages: [...prev.messages, newMessage],
+        unreadCount,
+      };
+    }, () => this.scrollToBottom());
     return newMessage;
   };
 
@@ -104,17 +138,27 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
         : m),
     }));
     if (response.actions?.length) {
-      if (this.props.requireApprovalForActions) this.setState({ showActionApproval: true, pendingActions: response.actions });
-      else void this.executeActions(response.actions);
+      const approvalToken = (response.runId && response.revision !== undefined)
+        ? `${response.runId}:${response.revision}`
+        : null;
+      if (this.props.requireApprovalForActions) {
+        this.setState({
+          showActionApproval: true,
+          pendingActions: response.actions,
+          approvalToken,
+        });
+      } else {
+        void this.executeActions(response.actions, approvalToken ?? undefined);
+      }
     }
   };
 
   private handleSendMessage = async (e: Event) => {
     e.preventDefault();
-    const { inputValue, isLoading } = this.state;
-    if (!inputValue.trim() || isLoading) return;
+    const { inputValue, isLoading, isExecutingActions } = this.state;
+    if (!inputValue.trim() || isLoading || isExecutingActions) return;
 
-    this.setState({ showActionApproval: false, pendingActions: [] });
+    this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
     const message = inputValue.trim();
     this.setState({ inputValue: '', isLoading: true });
@@ -143,31 +187,70 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     }
   };
 
-  private executeActions = async (actions: any[]) => {
-    this.setState({ isLoading: true });
+  private handleStop = () => {
+    this.isStoppedByUser = true;
+    this.props.onStop?.();
+  };
+
+  private executeActions = async (actions: any[], token?: string) => {
+    this.isStoppedByUser = false;
+    this.setState({ isLoading: true, isExecutingActions: true });
     const statusMsg = this.addMessage({ role: 'assistant', content: 'Running the approved steps...', isStreaming: true });
     try {
-      const response = await this.props.onActionApproval(actions);
-      if (response) this.applyResponse(statusMsg.id, response);
+      const response = await this.props.onActionApproval(actions, token);
+      if (this.isStoppedByUser) {
+        this.setState(prev => ({
+          messages: prev.messages.map(m => m.id === statusMsg.id
+            ? { ...m, content: 'Stopped. Steps already done were kept.', isStreaming: false }
+            : m),
+        }));
+      } else if (response) {
+        this.applyResponse(statusMsg.id, response);
+      }
     } catch (error) {
-      const text = error instanceof Error ? error.message : 'Unknown error';
-      this.setState(prev => ({ messages: prev.messages.map(m => m.id === statusMsg.id ? { ...m, content: `Error: ${text}`, isStreaming: false } : m) }));
+      if (this.isStoppedByUser) {
+        this.setState(prev => ({
+          messages: prev.messages.map(m => m.id === statusMsg.id
+            ? { ...m, content: 'Stopped. Steps already done were kept.', isStreaming: false }
+            : m),
+        }));
+      } else {
+        const text = error instanceof Error ? error.message : 'Unknown error';
+        const displayContent = text.includes('out of date') ? 'This plan is out of date.' : `Error: ${text}`;
+        this.setState(prev => ({
+          messages: prev.messages.map(m => m.id === statusMsg.id
+            ? { ...m, content: displayContent, isStreaming: false }
+            : m),
+        }));
+      }
     } finally {
-      this.setState({ isLoading: false });
+      this.isStoppedByUser = false;
+      this.setState({ isLoading: false, isExecutingActions: false });
     }
   };
 
   private handleActionApproval = async (approved: boolean) => {
-    this.setState({ showActionApproval: false });
-    if (approved && this.state.pendingActions.length > 0) {
-      await this.executeActions(this.state.pendingActions);
+    const token = this.state.approvalToken;
+    const actions = this.state.pendingActions;
+    this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
+
+    if (approved && actions.length > 0) {
+      await this.executeActions(actions, token ?? undefined);
+    } else if (!approved) {
+      this.addMessage({ role: 'assistant', content: 'Plan cancelled.' });
+      if (this.props.onCancelApproval) {
+        try {
+          await this.props.onCancelApproval();
+        } catch (error) {
+          console.error('[GhostCursor] Cancel approval error:', error);
+        }
+      }
     }
-    this.setState({ pendingActions: [] });
   };
 
   private handleOptionSelect = async (option: string) => {
-    if (!option || this.state.isLoading) return;
-    this.setState({ showActionApproval: false, pendingActions: [] });
+    if (!option || this.state.isLoading || this.state.isExecutingActions) return;
+    this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
     // Send selected option as user response
     const message = option;
@@ -193,7 +276,19 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   };
 
   private toggleChat = () => {
-    this.setState(prev => ({ isOpen: !prev.isOpen }));
+    this.setState(prev => {
+      const nextIsOpen = !prev.isOpen;
+      return {
+        isOpen: nextIsOpen,
+        unreadCount: nextIsOpen ? 0 : prev.unreadCount,
+      };
+    }, () => {
+      if (this.state.isOpen) {
+        setTimeout(() => {
+          this.inputRef.current?.focus();
+        }, 50);
+      }
+    });
   };
 
   private handleInputChange = (e: Event) => {
@@ -202,7 +297,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   };
 
   render() {
-    const { isOpen, messages, inputValue, isLoading, showActionApproval, pendingActions, error } = this.state;
+    const { isOpen, messages, inputValue, isLoading, isExecutingActions, unreadCount, showActionApproval, pendingActions, error } = this.state;
     const { theme, requireApprovalForActions } = this.props;
 
     const positions = {
@@ -295,7 +390,11 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             </div>
 
             {/* Messages */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div
+              role="log"
+              aria-live="polite"
+              style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}
+            >
               {messages.length === 0 ? (
                 <div style={{ textAlign: 'center', color: '#6b7280', margin: 'auto 0', padding: '20px' }}>
                   <div style={{ fontSize: '32px', marginBottom: '8px' }}>👻</div>
@@ -350,7 +449,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); this.handleSendMessage(e); }
                   }}
                   placeholder="Ask me anything..."
-                  disabled={isLoading}
+                  disabled={isLoading || isExecutingActions}
                   style={{
                     flex: 1,
                     minHeight: '44px',
@@ -366,29 +465,56 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   }}
                   aria-label="Message input"
                 />
-                <button
-                  type="submit"
-                  disabled={!inputValue.trim() || isLoading}
-                  style={{
-                    width: '44px',
-                    height: '44px',
-                    borderRadius: '12px',
-                    background: inputValue.trim() && !isLoading ? theme.primaryColor : '#d1d5db',
-                    border: 'none',
-                    color: 'white',
-                    cursor: inputValue.trim() && !isLoading ? 'pointer' : 'not-allowed',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    transition: 'background 0.2s',
-                  }}
-                  aria-label="Send message"
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <line x1="22" y1="2" x2="11" y2="13"></line>
-                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-                  </svg>
-                </button>
+                {isExecutingActions ? (
+                  <button
+                    type="button"
+                    onClick={this.handleStop}
+                    style={{
+                      height: '44px',
+                      padding: '0 16px',
+                      borderRadius: '12px',
+                      background: '#ef4444',
+                      border: 'none',
+                      color: 'white',
+                      fontWeight: 600,
+                      fontSize: '13px',
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                    }}
+                    aria-label="Stop"
+                  >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                      <rect x="4" y="4" width="16" height="16" rx="2" />
+                    </svg>
+                    Stop
+                  </button>
+                ) : (
+                  <button
+                    type="submit"
+                    disabled={!inputValue.trim() || isLoading}
+                    style={{
+                      width: '44px',
+                      height: '44px',
+                      borderRadius: '12px',
+                      background: inputValue.trim() && !isLoading ? theme.primaryColor : '#d1d5db',
+                      border: 'none',
+                      color: 'white',
+                      cursor: inputValue.trim() && !isLoading ? 'pointer' : 'not-allowed',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'background 0.2s',
+                    }}
+                    aria-label="Send message"
+                  >
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <line x1="22" y1="2" x2="11" y2="13"></line>
+                      <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                  </button>
+                )}
               </div>
               {requireApprovalForActions && (
                 <div style={{ marginTop: '8px', fontSize: '11px', color: '#6b7280', textAlign: 'center' }}>
@@ -421,7 +547,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
             </svg>
-            {messages.length > 0 && (
+            {unreadCount > 0 && (
               <span
                 style={{
                   position: 'absolute',
@@ -441,7 +567,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   border: '2px solid white',
                 }}
               >
-                {messages.length}
+                {unreadCount}
               </span>
             )}
           </button>

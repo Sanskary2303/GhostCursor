@@ -223,6 +223,7 @@ export class WebSocketTransport implements Transport {
 export class HttpTransport implements Transport {
   private options: Required<TransportOptions>;
   private isClosed = false;
+  private abortControllers: Set<AbortController> = new Set();
 
   private eventListeners: Map<TransportEventType, Set<(event: TransportEvent) => void>> = new Map();
 
@@ -278,6 +279,9 @@ export class HttpTransport implements Transport {
       throw new Error('Transport is closed');
     }
 
+    const controller = new AbortController();
+    this.abortControllers.add(controller);
+
     try {
       const headers = await this.options.headers();
       const response = await fetch(this.options.gatewayUrl, {
@@ -287,6 +291,7 @@ export class HttpTransport implements Transport {
           ...headers,
         },
         body: JSON.stringify(request),
+        signal: controller.signal,
       });
 
       if (!response.ok) {
@@ -302,11 +307,21 @@ export class HttpTransport implements Transport {
       this.emit('error', { type: 'error', error: error as Error });
       this.options.onError(error as Error);
       throw error;
+    } finally {
+      this.abortControllers.delete(controller);
     }
   }
 
   close(): void {
     this.isClosed = true;
+    for (const controller of this.abortControllers) {
+      try {
+        controller.abort();
+      } catch {
+        // ignore
+      }
+    }
+    this.abortControllers.clear();
     this.emit('close', { type: 'close' });
   }
 

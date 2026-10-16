@@ -271,6 +271,52 @@ test('new message clears previous approval panel and prevents running stale plan
   await expect(page.locator('[data-ghost-id="theme.dark"]')).toHaveClass(/bg-blue-50/, { timeout: 20_000 });
 });
 
+test('cancel button cancels the plan and notifies server', async ({ page }) => {
+  const cancelRequests: any[] = [];
+  page.on('request', r => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/ghost-cursor')) {
+      try {
+        const body = r.postDataJSON();
+        if (body.kind === 'cancel') cancelRequests.push(body);
+      } catch {}
+    }
+  });
+
+  await page.goto('/');
+  await ask(page, 'Turn on dark mode');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 10_000 });
+  await page.getByRole('button', { name: 'Cancel' }).click();
+
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).not.toBeVisible();
+  await expect(chat(page)).toContainText('Plan cancelled.', { timeout: 10_000 });
+  expect(cancelRequests.length).toBe(1);
+  expect(cancelRequests[0].kind).toBe('cancel');
+});
+
+test('accessibility: role=log, aria-live=polite, focus on open, and escape to close', async ({ page }) => {
+  await page.goto('/');
+  const openBtn = page.getByRole('button', { name: 'Open Ghost Cursor chat' });
+  await expect(openBtn).toBeVisible();
+  await openBtn.click();
+
+  // Check role=log and aria-live=polite
+  const logEl = page.locator('[role="log"][aria-live="polite"]');
+  await expect(logEl).toBeVisible();
+
+  // Focus on input
+  const input = page.getByRole('textbox', { name: 'Message input' });
+  await expect(input).toBeFocused();
+
+  // Escape key closes chat
+  await page.keyboard.press('Escape');
+  await expect(chat(page)).not.toBeVisible();
+
+  // Can reopen
+  await openBtn.click();
+  await expect(chat(page)).toBeVisible();
+});
+
+
 
 
 

@@ -33,17 +33,23 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
  * Animates the ghost cursor to a target element
  */
 async function animateCursorTo(element: HTMLElement, onCursorMove: (el: HTMLElement) => void): Promise<void> {
+  const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   // Scroll element into view
-  element.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+  element.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center', inline: 'center' });
 
   // Wait for scroll to complete
-  await new Promise(resolve => setTimeout(resolve, 300));
+  if (!reduced) {
+    await new Promise(resolve => setTimeout(resolve, 300));
+  }
 
   // Trigger cursor animation callback
   onCursorMove(element);
 
   // Small delay for visual effect
-  await new Promise(resolve => setTimeout(resolve, 200));
+  if (!reduced) {
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
 }
 
 const TARGET_ID_PATTERN = /^[a-zA-Z0-9_.:-]{1,120}$/;
@@ -398,6 +404,7 @@ function removeHighlight(element: HTMLElement): void {
 export class ActionExecutor {
   private options: Required<ExecutionOptions>;
   private abortController: AbortController | null = null;
+  private isStopped = false;
 
   constructor(options: ExecutionOptions = {}) {
     this.options = { ...DEFAULT_EXECUTION_OPTIONS, ...options };
@@ -408,16 +415,31 @@ export class ActionExecutor {
    */
   async execute(actions: Action[]): Promise<ExecutionResult> {
     this.abortController = new AbortController();
+    if (this.isStopped) {
+      this.abortController.abort();
+    }
     const results: ToolResult[] = [];
     const skipRest = (from: number, reason: string) => {
       for (const rest of actions.slice(from)) results.push({ id: rest.id ?? crypto.randomUUID(), ok: false, error: reason });
     };
     for (let i = 0; i < actions.length; i++) {
-      if (this.abortController.signal.aborted) { skipRest(i, 'cancelled by user'); return { success: false, results, error: 'cancelled' }; }
+      if (this.abortController.signal.aborted || this.isStopped) {
+        skipRest(i, 'cancelled by user');
+        this.isStopped = false;
+        return { success: false, results, error: 'cancelled' };
+      }
       const result = await executeAction(actions[i], this.options);
       result.id = actions[i].id ?? result.id;
       results.push(result);
-      if (!result.ok) { skipRest(i + 1, 'skipped: an earlier step failed'); return { success: false, results, error: result.error }; }
+      if (this.abortController.signal.aborted || this.isStopped) {
+        skipRest(i + 1, 'cancelled by user');
+        this.isStopped = false;
+        return { success: false, results, error: 'cancelled' };
+      }
+      if (!result.ok) {
+        skipRest(i + 1, 'skipped: an earlier step failed');
+        return { success: false, results, error: result.error };
+      }
     }
     return { success: true, results };
   }
@@ -426,6 +448,7 @@ export class ActionExecutor {
    * Stop execution
    */
   stop(): void {
+    this.isStopped = true;
     if (this.abortController) {
       this.abortController.abort();
     }

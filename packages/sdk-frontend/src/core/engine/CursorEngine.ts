@@ -19,6 +19,11 @@ const DEFAULT_OPTIONS: Required<CursorOptions> = {
   zIndex: 99999,
 };
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
 export class CursorEngine {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;
@@ -81,6 +86,17 @@ export class CursorEngine {
     const rect = element.getBoundingClientRect();
     const targetX = rect.left + rect.width / 2;
     const targetY = rect.top + rect.height / 2;
+
+    if (prefersReducedMotion() || this.options.animationDuration === 0) {
+      this.currentPosition = { x: targetX, y: targetY };
+      this.targetPosition = null;
+      this.trail = [];
+      if (this.ctx) {
+        this.ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+        this.drawCursor(this.currentPosition.x, this.currentPosition.y);
+      }
+      return;
+    }
 
     this.targetPosition = { x: targetX, y: targetY };
     this.isAnimating = true;
@@ -214,6 +230,12 @@ export class CursorEngine {
    */
   async click(): Promise<void> {
     if (!this.ctx) return;
+
+    if (prefersReducedMotion()) {
+      this.ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+      this.drawCursor(this.currentPosition.x, this.currentPosition.y);
+      return;
+    }
 
     const { size, color } = this.options;
     const radius = size / 2;

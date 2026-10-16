@@ -11,7 +11,7 @@ import { resolveTargetWithCascade, registerTarget } from './dom-utils';
 export interface GhostCursorSDK {
   dispose(): void;
   sendMessage(message: string): Promise<void>;
-  executeActions(actions: Action[]): Promise<PublicResponse | null>;
+  executeActions(actions: Action[], token?: string): Promise<PublicResponse | null>;
   startTour(steps: any[]): Promise<void>;
   updateContext(context: Partial<PageContext>): void;
   getContext(): PageContext | null;
@@ -170,7 +170,16 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         rememberStatus(res);
         return res;
       },
-      onActionApproval: (actions: any[]) => executeActions(actions),
+      onActionApproval: (actions: any[], token?: string) => executeActions(actions, token),
+      onCancelApproval: async () => {
+        if (!currentRunId) return null;
+        const res = await transportManager.continue('cancel', {});
+        rememberStatus(res);
+        return res;
+      },
+      onStop: () => {
+        actionExecutor.stop();
+      },
     }),
     shadowRoot
   );
@@ -254,9 +263,10 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   /**
    * Execute approved actions
    */
-  async function executeActions(actions: Action[]): Promise<PublicResponse | null> {
-    if (isDisposed || !currentRunId || lastStatus !== 'awaiting_actions') {
-      throw new Error('This plan is out of date. Please ask again.');
+  async function executeActions(actions: Action[], token?: string): Promise<PublicResponse | null> {
+    const currentToken = `${transportManager.getRunId()}:${transportManager.getRevision()}`;
+    if (isDisposed || !currentRunId || lastStatus !== 'awaiting_actions' || (token && token !== currentToken)) {
+      throw new Error('This plan is out of date.');
     }
     const execution = await actionExecutor.execute(actions);
     const res = await transportManager.continue('actions', { results: execution.results });

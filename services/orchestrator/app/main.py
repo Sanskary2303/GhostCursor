@@ -44,7 +44,8 @@ EXPECTED_KINDS = {
 }
 from .tools.frontend_actions import FRONTEND_ACTION_TOOLS, FRONTEND_TOOL_NAMES, is_frontend_tool, normalize_schema
 from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore
-from .llm.vertex import VertexAIClient, MockVertexAIClient
+from .llm.vertex import BaseVertexClient, MockVertexAIClient, ProviderError
+from .llm.gemini import GeminiProvider, prune_transcript
 from .tools.loopback import GatewayLoopbackHandler
 
 # Configure logging
@@ -76,7 +77,7 @@ TENANT_KEYS: Dict[str, str] = load_tenant_keys()
 
 # Global instances
 run_store: Optional[RunStore] = None
-vertex_client: Optional[VertexAIClient] = None
+vertex_client: Optional[BaseVertexClient] = None
 loopback_handler: Optional[GatewayLoopbackHandler] = None
 
 
@@ -114,7 +115,8 @@ def init_globals():
         if ghost_provider == "vertex":
             project_id = os.environ["GCP_PROJECT_ID"]
             location = os.getenv("GCP_LOCATION", "us-central1")
-            vertex_client = VertexAIClient(project_id=project_id, location=location)
+            model = os.getenv("GHOST_MODEL", "gemini-2.0-flash")
+            vertex_client = GeminiProvider(project=project_id, location=location, model=model)
         else:
             vertex_client = MockVertexAIClient()
 
@@ -369,6 +371,11 @@ async def create_run(
 
         # Run initial planning
         run_state.revision = 0
+        run_state.transcript.append({
+            "role": "user",
+            "parts": [{"text": request.message}],
+        })
+        prune_transcript(run_state.transcript, max_parts=40)
         response = await _run_agent_turn(agent, run_state, request.message)
         _register_pending(response, run_state)
         response.revision = 0
@@ -497,11 +504,22 @@ async def _run_agent_turn(agent: GhostAgent, run_state: RunState, user_message: 
         raise RuntimeError("Vertex client not initialized")
 
     # Generate response using Vertex AI
-    response = await vertex_client.generate_content(
-        agent=agent,
-        user_message=user_message,
-        run_context=run_state.to_agent_context(),
-    )
+    try:
+        response = await vertex_client.generate_content(
+            agent=agent,
+            user_message=user_message,
+            run_context=run_state.to_agent_context(),
+            transcript=run_state.transcript,
+        )
+    except ProviderError as e:
+        logger.error(f"Provider error during run {run_state.id}: {e}")
+        return HostedRunResponse(
+            protocolVersion=run_state.protocol_version,
+            runId=run_state.id,
+            revision=max(0, run_state.revision),
+            status="failed",
+            reply="The assistant is unavailable right now.",
+        )
 
     if response.status in ("failed", "cancelled"):
         return response
@@ -576,6 +594,40 @@ async def _handle_tool_results(
 ) -> HostedRunResponse:
     """Handle tool execution results from gateway"""
     run_state.latest_tool_results = results or []
+
+    # Map result IDs to tool names from previous toolCalls in history
+    tool_map = {}
+    if run_state.history:
+        prev_resp = run_state.history[-1].get("response", {})
+        for tc in prev_resp.get("toolCalls", []):
+            if isinstance(tc, dict):
+                tool_map[tc.get("id")] = tc.get("tool")
+            elif hasattr(tc, "id") and hasattr(tc, "tool"):
+                tool_map[tc.id] = tc.tool
+
+    parts = []
+    for r in (results or []):
+        r_id = r.id if hasattr(r, "id") else r.get("id")
+        r_ok = r.ok if hasattr(r, "ok") else r.get("ok", True)
+        r_out = r.output if hasattr(r, "output") else r.get("output")
+        r_err = r.error if hasattr(r, "error") else r.get("error")
+
+        tool_name = tool_map.get(r_id, "backend_tool")
+        resp_payload = {"ok": True, "output": r_out if r_out is not None else {}} if r_ok else {"ok": False, "error": r_err or "tool_failed"}
+        parts.append({
+            "function_response": {
+                "name": tool_name,
+                "response": resp_payload,
+            }
+        })
+
+    if parts:
+        run_state.transcript.append({
+            "role": "user",
+            "parts": parts,
+        })
+        prune_transcript(run_state.transcript, max_parts=40)
+
     # Reload agent with updated context
     agent = create_ghost_agent(
         brain_content=run_state.start_payload.get("brain", ""),
@@ -605,6 +657,37 @@ async def _handle_action_results(
             reply="Stopped because a step failed. Changes already made on the page were kept.",
         )
 
+    # Map result IDs to action names from previous actions in history
+    action_map = {}
+    if run_state.history:
+        prev_resp = run_state.history[-1].get("response", {})
+        for a in prev_resp.get("actions", []):
+            if isinstance(a, dict):
+                action_map[a.get("id")] = a.get("type")
+
+    parts = []
+    for r in (results or []):
+        r_id = r.id if hasattr(r, "id") else r.get("id")
+        r_ok = r.ok if hasattr(r, "ok") else r.get("ok", True)
+        r_out = r.output if hasattr(r, "output") else r.get("output")
+        r_err = r.error if hasattr(r, "error") else r.get("error")
+
+        action_name = action_map.get(r_id, "action")
+        resp_payload = {"ok": True, "output": r_out if r_out is not None else {}} if r_ok else {"ok": False, "error": r_err or "action_failed"}
+        parts.append({
+            "function_response": {
+                "name": action_name,
+                "response": resp_payload,
+            }
+        })
+
+    if parts:
+        run_state.transcript.append({
+            "role": "user",
+            "parts": parts,
+        })
+        prune_transcript(run_state.transcript, max_parts=40)
+
     context_dict = (
         updated_context.model_dump()
         if hasattr(updated_context, "model_dump")
@@ -629,6 +712,13 @@ async def _handle_user_answer(
     updated_context: Optional[Any],
 ) -> HostedRunResponse:
     """Handle user answer to clarification question"""
+    if answer:
+        run_state.transcript.append({
+            "role": "user",
+            "parts": [{"text": answer}],
+        })
+        prune_transcript(run_state.transcript, max_parts=40)
+
     context_dict = (
         updated_context.model_dump()
         if hasattr(updated_context, "model_dump")

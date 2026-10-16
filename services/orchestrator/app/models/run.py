@@ -35,6 +35,7 @@ class RunState:
     latest_action_results: Optional[List[Any]] = None
     latest_kind: Optional[str] = None
     pending_ids: List[str] = field(default_factory=list)
+    transcript: List[Dict[str, Any]] = field(default_factory=list)
     history: List[Dict[str, Any]] = field(default_factory=list)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: datetime = field(
@@ -82,6 +83,7 @@ class RunState:
             "status": self.status,
             "turn_count": self.turn_count,
             "kind": self.latest_kind,
+            "transcript": self.transcript,
             "tool_results": [
                 r.model_dump() if hasattr(r, "model_dump") else r
                 for r in (self.latest_tool_results or [])
@@ -116,6 +118,7 @@ class RunState:
             "latest_event_id": self.latest_event_id,
             "latest_event_digest": self.latest_event_digest,
             "pending_ids": self.pending_ids,
+            "transcript": self.transcript,
             "history": self.history,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
@@ -138,6 +141,7 @@ class RunState:
             latest_event_id=data.get("latest_event_id"),
             latest_event_digest=data.get("latest_event_digest"),
             pending_ids=data.get("pending_ids", []),
+            transcript=data.get("transcript", []),
             history=data.get("history", []),
             created_at=datetime.fromisoformat(data["created_at"]) if isinstance(data.get("created_at"), str) else data.get("created_at", datetime.now(timezone.utc)),
             expires_at=datetime.fromisoformat(data["expires_at"]) if isinstance(data.get("expires_at"), str) else data.get("expires_at", datetime.now(timezone.utc) + timedelta(seconds=RUN_EXPIRY_SECONDS)),

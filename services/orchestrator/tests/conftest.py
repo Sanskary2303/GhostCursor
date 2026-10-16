@@ -11,3 +11,14 @@ os.environ.setdefault(
     "test-key-shophive-demo-0123456789abcdef",
 )
 os.environ.setdefault("GHOST_RATE_LIMIT_PER_MIN", "100000")
+
+import pytest
+
+@pytest.fixture
+def auth_headers():
+    return {
+        "Authorization": "Bearer test-key-shophive-demo-0123456789abcdef",
+        "X-Ghost-Subject": "user_demo_123",
+        "Content-Type": "application/json",
+    }
+

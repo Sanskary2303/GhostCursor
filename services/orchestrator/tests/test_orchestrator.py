@@ -1049,10 +1049,8 @@ async def test_undeclared_tool_name_fails_run(monkeypatch, auth_headers):
 
 def test_mixed_calls_to_parse_response_fails():
     """Passing mixed function calls to _parse_response returns failed with plan failure reply"""
-    from services.orchestrator.app.llm.vertex import VertexAIClient
+    from services.orchestrator.app.llm.vertex import parse_model_response
     from types import SimpleNamespace
-
-    client = VertexAIClient(project_id="test", location="us-central1")
 
     # Mixed frontend + backend
     fake_mixed_response = SimpleNamespace(
@@ -1077,7 +1075,7 @@ def test_mixed_calls_to_parse_response_fails():
             )
         ]
     )
-    result = client._parse_response(fake_mixed_response, {"run_id": "test-run", "revision": 0})
+    result = parse_model_response(fake_mixed_response, {"run_id": "test-run", "revision": 0})
     assert result.status == "failed"
     assert result.reply == "I couldn't produce a valid plan. Please rephrase."
 
@@ -1104,7 +1102,7 @@ def test_mixed_calls_to_parse_response_fails():
             )
         ]
     )
-    result_clarify = client._parse_response(fake_clarify_mixed, {"run_id": "test-run", "revision": 0})
+    result_clarify = parse_model_response(fake_clarify_mixed, {"run_id": "test-run", "revision": 0})
     assert result_clarify.status == "failed"
     assert result_clarify.reply == "I couldn't produce a valid plan. Please rephrase."
 

@@ -17,6 +17,11 @@ from ..models.contracts import HostedRunResponse, ToolCallRequest, ClarifyQuesti
 logger = logging.getLogger(__name__)
 
 
+class ProviderError(Exception):
+    """Raised when an LLM provider encounters an error communicating with the model."""
+    pass
+
+
 class BaseVertexClient(ABC):
     """Abstract Vertex AI client interface"""
 
@@ -26,273 +31,146 @@ class BaseVertexClient(ABC):
         agent: GhostAgent,
         user_message: str,
         run_context: Dict[str, Any],
+        transcript: Optional[List[Dict[str, Any]]] = None,
     ) -> HostedRunResponse:
         pass
 
 
-class VertexAIClient(BaseVertexClient):
-    """
-    Real Vertex AI / Gemini 2.0 client.
-    Uses google-cloud-aiplatform SDK.
-    """
+def parse_model_response(
+    response: Any,
+    run_context: Dict[str, Any],
+) -> HostedRunResponse:
+    """Parse Gemini model response into HostedRunResponse using strict Step 19 rules."""
+    run_id = run_context.get("run_id", str(uuid.uuid4()))
+    revision = run_context.get("revision", 0)
 
-    def __init__(
-        self,
-        project_id: str,
-        location: str = "us-central1",
-        model_name: str = "gemini-2.0-flash",
-    ):
-        self.project_id = project_id
-        self.location = location
-        self.model_name = model_name
-        self._client = None
+    try:
+        if hasattr(response, 'candidates') and response.candidates:
+            candidate = response.candidates[0]
+            content = getattr(candidate, 'content', None)
+            parts = getattr(content, 'parts', None) if content else []
 
-    async def _get_client(self):
-        """Lazy-init the Vertex AI client"""
-        if self._client is None:
-            try:
-                import google.generativeai as genai
-                genai.configure()  # Uses Application Default Credentials
+            function_calls = []
+            text_parts = []
 
-                self._client = genai.GenerativeModel(
-                    model_name=self.model_name,
-                    system_instruction=None,  # Set per-request
-                )
-                logger.info(f"Initialized Vertex AI client: {self.model_name}")
-            except Exception as e:
-                logger.error(f"Failed to initialize Vertex AI: {e}")
-                raise
-
-        return self._client
-
-    async def generate_content(
-        self,
-        agent: GhostAgent,
-        user_message: str,
-        run_context: Dict[str, Any],
-    ) -> HostedRunResponse:
-        """Generate content using Gemini 2.0"""
-        client = await self._get_client()
-
-        # Build the prompt
-        prompt = self._build_prompt(agent, user_message, run_context)
-
-        # Build tool declarations for function calling
-        tools = self._build_tool_declarations(agent.tools)
-
-        try:
-            response = client.generate_content(
-                contents=prompt,
-                tools=tools if tools else None,
-                generation_config={
-                    "temperature": 0.3,
-                    "top_p": 0.8,
-                    "top_k": 40,
-                    "max_output_tokens": 4096,
-                },
-            )
-
-            return self._parse_response(response, run_context)
-
-        except Exception as e:
-            logger.error(f"Vertex AI generation failed: {e}")
-            return HostedRunResponse(
-                protocolVersion="1",
-                runId=run_context.get("run_id", str(uuid.uuid4())),
-                revision=run_context.get("revision", 0),
-                status="failed",
-                reply=f"I encountered an error processing your request. Please try again.",
-            )
-
-    def _build_prompt(
-        self,
-        agent: GhostAgent,
-        user_message: str,
-        run_context: Dict[str, Any],
-    ) -> list:
-        """Build conversation prompt for Gemini"""
-        messages = []
-
-        # System instruction
-        messages.append({
-            "role": "user",
-            "parts": [{"text": f"[SYSTEM INSTRUCTION]\n{agent.instruction}"}],
-        })
-        messages.append({
-            "role": "model",
-            "parts": [{"text": "I understand. I'm Ghost Cursor, ready to assist."}],
-        })
-
-        # Add conversation history
-        history = run_context.get("history", [])
-        for turn in history:
-            if turn.get("type") == "initial":
-                continue
-            response_text = turn.get("response", "")
-            if response_text:
-                messages.append({
-                    "role": "model",
-                    "parts": [{"text": response_text}],
-                })
-
-        # Add current user message
-        if user_message:
-            messages.append({
-                "role": "user",
-                "parts": [{"text": user_message}],
-            })
-
-        return messages
-
-    def _build_tool_declarations(self, tools: List[Dict[str, Any]]) -> list:
-        """Convert tool declarations to Gemini format"""
-        try:
-            import google.generativeai as genai
-
-            tool_declarations = []
-            for tool in tools:
-                func_decl = genai.types.FunctionDeclaration(
-                    name=tool["name"],
-                    description=tool["description"],
-                    parameters=tool.get("parameters", {}),
-                )
-                tool_declarations.append(func_decl)
-
-            if tool_declarations:
-                return [genai.types.Tool(function_declarations=tool_declarations)]
-            return []
-        except Exception as e:
-            logger.warning(f"Failed to build tool declarations: {e}")
-            return []
-
-    def _parse_response(
-        self,
-        response: Any,
-        run_context: Dict[str, Any],
-    ) -> HostedRunResponse:
-        """Parse Gemini response into HostedRunResponse"""
-        run_id = run_context.get("run_id", str(uuid.uuid4()))
-        revision = run_context.get("revision", 0)
-
-        try:
-            # Check for function calls
-            if hasattr(response, 'candidates') and response.candidates:
-                candidate = response.candidates[0]
-                content = candidate.content
-
-                # Check for function call parts
-                function_calls = []
-                text_parts = []
-
-                for part in content.parts:
-                    if hasattr(part, 'function_call') and part.function_call:
-                        fc = part.function_call
-                        tool_name = getattr(fc, 'name', None) or getattr(fc, 'tool', '')
-                        args = getattr(fc, 'args', None)
-                        if args is None:
-                            args = getattr(fc, 'parameters', {})
+            for part in (parts or []):
+                fc = getattr(part, 'function_call', None)
+                text = getattr(part, 'text', None)
+                if fc:
+                    tool_name = getattr(fc, 'name', None) or getattr(fc, 'tool', '')
+                    args = getattr(fc, 'args', None)
+                    if args is None:
+                        args = getattr(fc, 'parameters', {})
+                    if hasattr(args, 'model_dump'):
+                        params = args.model_dump()
+                    else:
                         params = dict(args) if args else {}
-                        function_calls.append({
-                            "id": str(uuid.uuid4()),
-                            "tool": tool_name,
-                            "parameters": params,
-                        })
-                    elif hasattr(part, 'text') and part.text:
-                        text_parts.append(part.text)
+                    function_calls.append({
+                        "id": str(uuid.uuid4()),
+                        "tool": tool_name,
+                        "parameters": params,
+                    })
+                if text:
+                    text_parts.append(text)
 
-                reply = " ".join(text_parts) if text_parts else ""
+            reply = " ".join(text_parts) if text_parts else ""
 
-                # Determine response type
-                if function_calls:
-                    # Categorize function calls
-                    frontend_tools = {"navigate", "click", "fill_input", "toggle_switch", "guided_tour", "select_option"}
-                    clarification_tools = {"ask_clarification"}
+            if function_calls:
+                frontend_tools = {
+                    "navigate",
+                    "click",
+                    "fill_input",
+                    "toggle_switch",
+                    "guided_tour",
+                    "select_option",
+                }
+                clarification_tools = {"ask_clarification"}
 
-                    has_frontend = any(fc["tool"] in frontend_tools for fc in function_calls)
-                    has_clarification = any(fc["tool"] in clarification_tools for fc in function_calls)
-                    has_backend = any(fc["tool"] not in frontend_tools and fc["tool"] not in clarification_tools for fc in function_calls)
+                has_frontend = any(fc["tool"] in frontend_tools for fc in function_calls)
+                has_clarification = any(fc["tool"] in clarification_tools for fc in function_calls)
+                has_backend = any(
+                    fc["tool"] not in frontend_tools and fc["tool"] not in clarification_tools
+                    for fc in function_calls
+                )
 
-                    if (has_frontend and has_backend) or (has_clarification and (has_frontend or has_backend or len(function_calls) > 1)):
-                        logger.warning("Mixed function calls in model response")
-                        return HostedRunResponse(
-                            protocolVersion="1",
-                            runId=run_id,
-                            revision=revision,
-                            status="failed",
-                            reply="I couldn't produce a valid plan. Please rephrase.",
-                        )
+                if (has_frontend and has_backend) or (
+                    has_clarification and (has_frontend or has_backend or len(function_calls) > 1)
+                ):
+                    logger.warning("Mixed function calls in model response")
+                    return HostedRunResponse(
+                        protocolVersion="1",
+                        runId=run_id,
+                        revision=revision,
+                        status="failed",
+                        reply="I couldn't produce a valid plan. Please rephrase.",
+                    )
 
-                    if has_clarification:
-                        # Extract clarification question
-                        clarify_call = next(fc for fc in function_calls if fc["tool"] in clarification_tools)
-                        params = clarify_call["parameters"]
-                        return HostedRunResponse(
-                            protocolVersion="1",
-                            runId=run_id,
-                            revision=revision,
-                            status="awaiting_answer",
-                            reply=reply or params.get("question", "I need more information."),
-                            questions=[ClarifyQuestion(
+                if has_clarification:
+                    clarify_call = next(fc for fc in function_calls if fc["tool"] in clarification_tools)
+                    params = clarify_call["parameters"]
+                    return HostedRunResponse(
+                        protocolVersion="1",
+                        runId=run_id,
+                        revision=revision,
+                        status="awaiting_answer",
+                        reply=reply or params.get("question", "I need more information."),
+                        questions=[
+                            ClarifyQuestion(
                                 question=params.get("question", ""),
                                 options=params.get("options", []),
-                            )],
-                        )
-                    elif has_frontend:
-                        # Frontend actions
-                        actions = []
-                        for fc in function_calls:
-                            if fc["tool"] in frontend_tools:
-                                actions.append({
-                                    "type": fc["tool"],
-                                    **fc["parameters"],
-                                })
-                        return HostedRunResponse(
-                            protocolVersion="1",
-                            runId=run_id,
-                            revision=revision,
-                            status="awaiting_actions",
-                            reply=reply or "I'll help you with that. Here's what I plan to do:",
-                            actions=actions,
-                        )
-                    elif has_backend:
-                        # Backend tool calls
-                        tool_calls = [
-                            ToolCallRequest(id=fc["id"], tool=fc["tool"], parameters=fc["parameters"])
-                            for fc in function_calls
-                            if fc["tool"] not in frontend_tools and fc["tool"] not in clarification_tools
-                        ]
-                        return HostedRunResponse(
-                            protocolVersion="1",
-                            runId=run_id,
-                            revision=revision,
-                            status="awaiting_tools",
-                            reply=reply or "Let me look that up for you...",
-                            toolCalls=tool_calls,
-                        )
+                            )
+                        ],
+                    )
+                elif has_frontend:
+                    actions = []
+                    for fc in function_calls:
+                        if fc["tool"] in frontend_tools:
+                            actions.append({
+                                "type": fc["tool"],
+                                **fc["parameters"],
+                            })
+                    return HostedRunResponse(
+                        protocolVersion="1",
+                        runId=run_id,
+                        revision=revision,
+                        status="awaiting_actions",
+                        reply=reply or "I'll help you with that. Here's what I plan to do:",
+                        actions=actions,
+                    )
+                elif has_backend:
+                    tool_calls = [
+                        ToolCallRequest(id=fc["id"], tool=fc["tool"], parameters=fc["parameters"])
+                        for fc in function_calls
+                        if fc["tool"] not in frontend_tools and fc["tool"] not in clarification_tools
+                    ]
+                    return HostedRunResponse(
+                        protocolVersion="1",
+                        runId=run_id,
+                        revision=revision,
+                        status="awaiting_tools",
+                        reply=reply or "Let me look that up for you...",
+                        toolCalls=tool_calls,
+                    )
 
-                # Plain text response
-                return HostedRunResponse(
-                    protocolVersion="1",
-                    runId=run_id,
-                    revision=revision,
-                    status="completed",
-                    reply=reply or "I'm not sure how to help with that.",
-                )
+            # Plain text response
+            return HostedRunResponse(
+                protocolVersion="1",
+                runId=run_id,
+                revision=revision,
+                status="completed",
+                reply=reply or "I'm not sure how to help with that.",
+            )
 
-        except Exception as e:
-            logger.error(f"Failed to parse Gemini response: {e}")
+    except Exception as e:
+        logger.error(f"Failed to parse Gemini response: {e}")
 
-        return HostedRunResponse(
-            protocolVersion="1",
-            runId=run_id,
-            revision=revision,
-            status="failed",
-            reply="I encountered an error processing the response.",
-        )
-
-    async def close(self):
-        """Cleanup"""
-        self._client = None
+    return HostedRunResponse(
+        protocolVersion="1",
+        runId=run_id,
+        revision=revision,
+        status="failed",
+        reply="I encountered an error processing the response.",
+    )
 
 
 CHECKOUT_FILL_ACTIONS = [
@@ -389,15 +267,41 @@ class MockVertexAIClient(BaseVertexClient):
         },
     }
 
+    _parse_response = staticmethod(parse_model_response)
+
     async def generate_content(
         self,
         agent: GhostAgent,
         user_message: str,
         run_context: Dict[str, Any],
+        transcript: Optional[List[Dict[str, Any]]] = None,
     ) -> HostedRunResponse:
         """Generate mock response based on message patterns and continuation context"""
         run_id = run_context.get("run_id", str(uuid.uuid4()))
         revision = run_context.get("revision", 0)
+
+        def _record_and_return(resp: HostedRunResponse) -> HostedRunResponse:
+            if transcript is not None:
+                parts = []
+                if resp.actions:
+                    for a in resp.actions:
+                        args = {k: v for k, v in a.items() if k not in ("type", "id")}
+                        parts.append({"function_call": {"name": a.get("type", ""), "args": args}})
+                elif resp.toolCalls:
+                    for tc in resp.toolCalls:
+                        tool_name = getattr(tc, "tool", None) or (tc.get("tool") if isinstance(tc, dict) else "")
+                        tool_params = getattr(tc, "parameters", None) or (tc.get("parameters", {}) if isinstance(tc, dict) else {})
+                        parts.append({"function_call": {"name": tool_name, "args": tool_params}})
+                elif resp.questions:
+                    q = resp.questions[0]
+                    q_text = getattr(q, "question", None) or (q.get("question") if isinstance(q, dict) else "")
+                    q_opts = getattr(q, "options", None) or (q.get("options") if isinstance(q, dict) else [])
+                    parts.append({"function_call": {"name": "ask_clarification", "args": {"question": q_text, "options": q_opts}}})
+                elif resp.reply:
+                    parts.append({"text": resp.reply})
+                if parts:
+                    transcript.append({"role": "model", "parts": parts})
+            return resp
 
         tool_results = run_context.get("tool_results", [])
         action_results = run_context.get("action_results", [])
@@ -432,13 +336,13 @@ class MockVertexAIClient(BaseVertexClient):
                     reply_lines.append(str(out))
 
             reply = " ".join(reply_lines) if reply_lines else "I've retrieved the requested details from the system."
-            return HostedRunResponse(
+            return _record_and_return(HostedRunResponse(
                 protocolVersion="1",
                 runId=run_id,
                 revision=revision,
                 status="completed",
                 reply=reply,
-            )
+            ))
 
         # Handle action results continuation
         if kind == "actions" or action_results:
@@ -452,39 +356,39 @@ class MockVertexAIClient(BaseVertexClient):
                     if isinstance(failed_result, dict)
                     else getattr(failed_result, "error", None)
                 ) or "action failed"
-                return HostedRunResponse(
+                return _record_and_return(HostedRunResponse(
                     protocolVersion="1",
                     runId=run_id,
                     revision=revision,
                     status="failed",
                     reply=f"I couldn't finish: {first_error}. Steps done before it were kept.",
-                )
-            return HostedRunResponse(
+                ))
+            return _record_and_return(HostedRunResponse(
                 protocolVersion="1",
                 runId=run_id,
                 revision=revision,
                 status="completed",
                 reply="All steps executed successfully on your screen.",
-            )
+            ))
 
         # Handle clarification answer continuation
         if kind == "answer":
             if "main st" in user_message.lower():
-                return HostedRunResponse(
+                return _record_and_return(HostedRunResponse(
                     protocolVersion="1",
                     runId=run_id,
                     revision=revision,
                     status="awaiting_actions",
                     reply="I'll fill the checkout form with your saved address:",
                     actions=copy.deepcopy(CHECKOUT_FILL_ACTIONS),
-                )
-            return HostedRunResponse(
+                ))
+            return _record_and_return(HostedRunResponse(
                 protocolVersion="1",
                 runId=run_id,
                 revision=revision,
                 status="completed",
                 reply=f"Thank you for choosing '{user_message}'. I have applied this choice and proceeded.",
-            )
+            ))
 
         message_lower = user_message.lower().strip()
 
@@ -510,10 +414,10 @@ class MockVertexAIClient(BaseVertexClient):
                         ToolCallRequest(**{**tc, "id": str(uuid.uuid4())}) for tc in fixture["toolCalls"]
                     ]
 
-                return response
+                return _record_and_return(response)
 
         # Default response
-        return HostedRunResponse(
+        return _record_and_return(HostedRunResponse(
             protocolVersion="1",
             runId=run_id,
             revision=revision,
@@ -522,4 +426,4 @@ class MockVertexAIClient(BaseVertexClient):
                   f"Currently on page '{agent.current_context.get('page', 'unknown')}'. "
                   f"I can help you navigate the app, fill forms, click buttons, "
                   f"or answer questions about the platform. What would you like me to do?",
-        )
+        ))

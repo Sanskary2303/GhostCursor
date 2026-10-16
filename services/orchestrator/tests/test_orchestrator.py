@@ -370,12 +370,14 @@ async def test_runs_get_different_tool_call_ids(auth_headers):
         "requestId": str(uuid.uuid4()),
         "message": "Where is my order SH-1024?",
         "context": {"page": "orders", "values": {}, "availableTargets": []},
+        "tools": [{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
     }
     payload2 = {
         "protocolVersion": "1",
         "requestId": str(uuid.uuid4()),
         "message": "Where is my order SH-1024?",
         "context": {"page": "orders", "values": {}, "availableTargets": []},
+        "tools": [{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
     }
 
     transport = ASGITransport(app=app)
@@ -686,7 +688,6 @@ async def test_old_test_key_returns_401():
         res = await client.post(
             "/v1/runs",
             json={
-                "command": "start",
                 "protocolVersion": "1",
                 "requestId": str(uuid.uuid4()),
                 "message": "test",
@@ -804,7 +805,6 @@ async def test_body_too_large_rejected(auth_headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         large_payload = {
-            "command": "start",
             "protocolVersion": "1",
             "requestId": str(uuid.uuid4()),
             "message": "x" * 70000,
@@ -828,7 +828,6 @@ async def test_rate_limiting(monkeypatch, auth_headers):
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         payload = {
-            "command": "start",
             "protocolVersion": "1",
             "requestId": str(uuid.uuid4()),
             "message": "test",
@@ -874,7 +873,6 @@ async def test_expired_run_returns_410(auth_headers):
         res = await client.post(
             "/v1/runs",
             json={
-                "command": "start",
                 "protocolVersion": "1",
                 "requestId": req_id,
                 "message": "Add to cart",
@@ -910,7 +908,6 @@ async def test_expired_run_returns_410(auth_headers):
         dedup_res = await client.post(
             "/v1/runs",
             json={
-                "command": "start",
                 "protocolVersion": "1",
                 "requestId": req_id,
                 "message": "Add to cart",
@@ -967,6 +964,183 @@ async def test_post_missing_content_length_returns_411(auth_headers):
     header_dict = dict(response_headers)
     assert header_dict.get(b"cache-control") == b"no-store"
     assert header_dict.get(b"x-content-type-options") == b"nosniff"
+
+
+@pytest.mark.asyncio
+async def test_extra_field_in_create_body_rejected_422(auth_headers):
+    """Extra unknown field in create body returns 422 due to extra='forbid'"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Hello",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+            "unexpected_field": "disallowed",
+        }
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_nan_value_in_context_values_rejected_422(auth_headers):
+    """NaN or non-finite float in context.values is rejected with 422"""
+    from pydantic import ValidationError
+    from services.orchestrator.app.models.contracts import PageContext
+    with pytest.raises(ValidationError):
+        PageContext(values={"bad_val": float("nan")})
+    with pytest.raises(ValidationError):
+        PageContext(values={"inf_val": float("inf")})
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        req_id = str(uuid.uuid4())
+        content = json.dumps({
+            "protocolVersion": "1",
+            "requestId": req_id,
+            "message": "test",
+            "context": {"page": "home", "values": {"rating": float("nan")}, "availableTargets": []},
+        })
+        res = await client.post(
+            "/v1/runs",
+            content=content,
+            headers=dict(auth_headers, **{"Content-Type": "application/json"}),
+        )
+        assert res.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_undeclared_tool_name_fails_run(monkeypatch, auth_headers):
+    """Model calling an undeclared tool causes run to fail with plan failure reply"""
+    from services.orchestrator.app import main as main_module
+    from services.orchestrator.app.models.contracts import ToolCallRequest, HostedRunResponse
+
+    async def mock_generate(*args, **kwargs):
+        return HostedRunResponse(
+            protocolVersion="1",
+            runId=str(uuid.uuid4()),
+            revision=0,
+            status="awaiting_tools",
+            reply="Looking up...",
+            toolCalls=[ToolCallRequest(id=str(uuid.uuid4()), tool="unauthorized_tool", parameters={})],
+        )
+
+    monkeypatch.setattr(main_module.vertex_client, "generate_content", mock_generate)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "Perform action",
+                "tools": [{"name": "lookup_order", "description": "Lookup order", "parameters": {}}],
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "failed"
+        assert data["reply"] == "I couldn't produce a valid plan. Please rephrase."
+        assert not data.get("toolCalls")
+
+
+def test_mixed_calls_to_parse_response_fails():
+    """Passing mixed function calls to _parse_response returns failed with plan failure reply"""
+    from services.orchestrator.app.llm.vertex import VertexAIClient
+    from types import SimpleNamespace
+
+    client = VertexAIClient(project_id="test", location="us-central1")
+
+    # Mixed frontend + backend
+    fake_mixed_response = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(
+                content=SimpleNamespace(
+                    parts=[
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(
+                                name="click",
+                                args={"target_id": "btn_submit"},
+                            )
+                        ),
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(
+                                name="lookup_order",
+                                args={"order_id": "123"},
+                            )
+                        ),
+                    ]
+                )
+            )
+        ]
+    )
+    result = client._parse_response(fake_mixed_response, {"run_id": "test-run", "revision": 0})
+    assert result.status == "failed"
+    assert result.reply == "I couldn't produce a valid plan. Please rephrase."
+
+    # Mixed clarification + action
+    fake_clarify_mixed = SimpleNamespace(
+        candidates=[
+            SimpleNamespace(
+                content=SimpleNamespace(
+                    parts=[
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(
+                                name="ask_clarification",
+                                args={"question": "Which color?", "options": ["red", "blue"]},
+                            )
+                        ),
+                        SimpleNamespace(
+                            function_call=SimpleNamespace(
+                                name="click",
+                                args={"target_id": "btn"},
+                            )
+                        ),
+                    ]
+                )
+            )
+        ]
+    )
+    result_clarify = client._parse_response(fake_clarify_mixed, {"run_id": "test-run", "revision": 0})
+    assert result_clarify.status == "failed"
+    assert result_clarify.reply == "I couldn't produce a valid plan. Please rephrase."
+
+
+def test_validate_actions_strict_rules():
+    """validate_actions strictly enforces schemas, allowed keys, and length limits"""
+    from services.orchestrator.app.models.contracts import validate_actions
+
+    # Valid plan
+    valid = [
+        {"type": "navigate", "target_page": "orders", "explanation": "go to orders"},
+        {"type": "click", "target_id": "order.track", "explanation": "track order"},
+        {"type": "fill_input", "target_id": "search.input", "value": "shoes", "explanation": "search"},
+        {"type": "select_option", "target_id": "filter.sort", "option": "price_asc", "explanation": "sort"},
+        {"type": "toggle_switch", "target_id": "setting.dark", "state": True, "explanation": "dark mode"},
+        {"type": "guided_tour", "steps": [{"target_id": "hero.title", "message": "welcome"}], "explanation": "tour"},
+    ]
+    out = validate_actions(valid)
+    assert len(out) == 6
+
+    # Extra key rejected
+    with pytest.raises(ValueError, match="unexpected keys"):
+        validate_actions([{"type": "click", "target_id": "btn", "extra_key": "bad"}])
+
+    # Unsafe navigation rejected
+    with pytest.raises(ValueError, match="cannot contain '://'"):
+        validate_actions([{"type": "navigate", "target_page": "https://evil.com"}])
+
+    # Missing required field
+    with pytest.raises(ValueError, match="missing 'target_id'"):
+        validate_actions([{"type": "click"}])
+
+    # Too many actions
+    with pytest.raises(ValueError, match="at most 12 actions"):
+        validate_actions([{"type": "click", "target_id": f"btn.{i}"} for i in range(13)])
+
 
 
 

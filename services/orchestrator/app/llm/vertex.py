@@ -187,10 +187,15 @@ class VertexAIClient(BaseVertexClient):
                 for part in content.parts:
                     if hasattr(part, 'function_call') and part.function_call:
                         fc = part.function_call
+                        tool_name = getattr(fc, 'name', None) or getattr(fc, 'tool', '')
+                        args = getattr(fc, 'args', None)
+                        if args is None:
+                            args = getattr(fc, 'parameters', {})
+                        params = dict(args) if args else {}
                         function_calls.append({
                             "id": str(uuid.uuid4()),
-                            "tool": fc.name,
-                            "parameters": dict(fc.args) if fc.args else {},
+                            "tool": tool_name,
+                            "parameters": params,
                         })
                     elif hasattr(part, 'text') and part.text:
                         text_parts.append(part.text)
@@ -206,6 +211,16 @@ class VertexAIClient(BaseVertexClient):
                     has_frontend = any(fc["tool"] in frontend_tools for fc in function_calls)
                     has_clarification = any(fc["tool"] in clarification_tools for fc in function_calls)
                     has_backend = any(fc["tool"] not in frontend_tools and fc["tool"] not in clarification_tools for fc in function_calls)
+
+                    if (has_frontend and has_backend) or (has_clarification and (has_frontend or has_backend or len(function_calls) > 1)):
+                        logger.warning("Mixed function calls in model response")
+                        return HostedRunResponse(
+                            protocolVersion="1",
+                            runId=run_id,
+                            revision=revision,
+                            status="failed",
+                            reply="I couldn't produce a valid plan. Please rephrase.",
+                        )
 
                     if has_clarification:
                         # Extract clarification question

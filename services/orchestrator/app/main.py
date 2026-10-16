@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -32,6 +33,8 @@ from .models.contracts import (
     ToolCallResponse,
     ProtocolVersion,
     MAX_TURNS,
+    ToolDeclaration,
+    validate_actions,
 )
 
 EXPECTED_KINDS = {
@@ -356,11 +359,12 @@ async def create_run(
         available_targets = context_dict.get("availableTargets", [])
 
         # Create agent with brain context
+        customer_tools = [t.model_dump() if hasattr(t, "model_dump") else t for t in request.tools]
         agent = create_ghost_agent(
             brain_content=brain_content,
             available_targets=available_targets,
             current_context=context_dict,
-            customer_backend_tools=request.tools,
+            customer_backend_tools=customer_tools,
         )
 
         # Run initial planning
@@ -499,6 +503,70 @@ async def _run_agent_turn(agent: GhostAgent, run_state: RunState, user_message: 
         run_context=run_state.to_agent_context(),
     )
 
+    if response.status in ("failed", "cancelled"):
+        return response
+
+    # 1. Reject mixed outputs if any
+    active_outputs = sum([
+        bool(response.toolCalls),
+        bool(response.actions),
+        bool(response.questions),
+    ])
+    if active_outputs > 1:
+        logger.warning("Mixed output types in model response")
+        return HostedRunResponse(
+            protocolVersion=response.protocolVersion or "1",
+            runId=response.runId or run_state.id,
+            revision=max(0, run_state.revision),
+            status="failed",
+            reply="I couldn't produce a valid plan. Please rephrase.",
+        )
+
+    # 2. Validate actions if actions are present
+    if response.actions:
+        try:
+            response.actions = validate_actions(response.actions)
+        except Exception as e:
+            logger.warning(f"Action validation failed: {e}")
+            return HostedRunResponse(
+                protocolVersion=response.protocolVersion or "1",
+                runId=response.runId or run_state.id,
+                revision=max(0, run_state.revision),
+                status="failed",
+                reply="I couldn't produce a valid plan. Please rephrase.",
+            )
+
+    # 3. Check tool calls belong to declared tools
+    if response.toolCalls:
+        declared_tools = set()
+        for t in run_state.start_payload.get("tools", []):
+            if isinstance(t, dict):
+                declared_tools.add(t.get("name"))
+            elif hasattr(t, "name"):
+                declared_tools.add(t.name)
+
+        for tc in response.toolCalls:
+            tc_name = getattr(tc, "tool", None) or (tc.get("tool") if isinstance(tc, dict) else None)
+            if tc_name not in declared_tools:
+                logger.warning(f"Undeclared tool call attempted: {tc_name}")
+                return HostedRunResponse(
+                    protocolVersion=response.protocolVersion or "1",
+                    runId=response.runId or run_state.id,
+                    revision=max(0, run_state.revision),
+                    status="failed",
+                    reply="I couldn't produce a valid plan. Please rephrase.",
+                )
+
+    # 4. Derive status
+    if response.toolCalls:
+        response.status = "awaiting_tools"
+    elif response.actions:
+        response.status = "awaiting_actions"
+    elif response.questions:
+        response.status = "awaiting_answer"
+    else:
+        response.status = "completed"
+
     return response
 
 
@@ -598,6 +666,25 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": exc.detail},
+        headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = []
+    for err in exc.errors():
+        errors.append({
+            "loc": err.get("loc"),
+            "msg": str(err.get("msg")),
+            "type": err.get("type"),
+        })
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors},
         headers={
             "Cache-Control": "no-store",
             "X-Content-Type-Options": "nosniff",

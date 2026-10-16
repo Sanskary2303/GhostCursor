@@ -259,8 +259,10 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
    * Execute approved actions
    */
   async function executeActions(actions: Action[]): Promise<PublicResponse | null> {
+    if (isDisposed || !currentRunId || lastStatus !== 'awaiting_actions') {
+      throw new Error('This plan is out of date. Please ask again.');
+    }
     const execution = await actionExecutor.execute(actions);
-    if (isDisposed || !currentRunId) return null;
     const res = await transportManager.continue('actions', { results: execution.results });
     rememberStatus(res);
     return res;

@@ -230,7 +230,10 @@ async def serve_frontend(full_path: str):
     candidate = (frontend_dir / full_path).resolve()
     if full_path and candidate.is_file() and candidate.is_relative_to(frontend_dir):
         return FileResponse(candidate)
-    return FileResponse(frontend_dir / "index.html")
+    index_file = frontend_dir / "index.html"
+    if not index_file.is_file():
+        raise HTTPException(status_code=404)
+    return FileResponse(index_file)
 
 # ============================================================================
 # Main Entry Point

@@ -114,6 +114,8 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     const { inputValue, isLoading } = this.state;
     if (!inputValue.trim() || isLoading) return;
 
+    this.setState({ showActionApproval: false, pendingActions: [] });
+
     const message = inputValue.trim();
     this.setState({ inputValue: '', isLoading: true });
 
@@ -164,6 +166,9 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   };
 
   private handleOptionSelect = async (option: string) => {
+    if (!option || this.state.isLoading) return;
+    this.setState({ showActionApproval: false, pendingActions: [] });
+
     // Send selected option as user response
     const message = option;
     this.setState({ isLoading: true });

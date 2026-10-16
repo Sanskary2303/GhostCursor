@@ -233,5 +233,24 @@ test('invalid target_id formats are rejected with error invalid target id', asyn
 });
 
 
+test('new message clears previous approval panel and prevents running stale plan', async ({ page }) => {
+  await page.goto('/');
+  // 1. Ask "Turn on dark mode" and don't approve
+  await ask(page, 'Turn on dark mode');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 10_000 });
+
+  // 2. Ask "What sizes are available?". The approval panel disappears.
+  await ask(page, 'What sizes are available?');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).not.toBeVisible();
+  await expect(chat(page)).toContainText('sizes 7 through 13', { timeout: 20_000 });
+
+  // 3. Ask "Turn on dark mode" again and approve. It still works.
+  await ask(page, 'Turn on dark mode');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 10_000 });
+  await approve(page);
+  await expect(page.locator('[data-ghost-id="theme.dark"]')).toHaveClass(/bg-blue-50/, { timeout: 20_000 });
+});
+
+
 
 

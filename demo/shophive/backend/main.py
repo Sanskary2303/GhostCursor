@@ -14,6 +14,7 @@ backend_dir = Path(__file__).resolve().parent
 sys.path.insert(0, str(backend_dir))
 sys.path.insert(0, str(backend_dir.parent.parent / "packages" / "sdk-server-python"))
 
+from contextlib import asynccontextmanager
 import logging
 import secrets
 from fastapi import FastAPI, Depends, Request, HTTPException
@@ -43,9 +44,41 @@ GHOST_CURSOR_TENANT_ID = os.getenv("GHOST_CURSOR_TENANT_ID", "shophive_demo")
 GHOST_CURSOR_BRAIN_DIR = os.getenv("GHOST_CURSOR_BRAIN_DIR", str(backend_dir / "brain"))
 GHOST_CURSOR_SERVICE_URL = os.getenv("GHOST_CURSOR_SERVICE_URL", "http://localhost:8080")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./shophive.db")
-if DATABASE_URL.startswith("sqlite:///"):
-    DATABASE_URL = DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+SHOPHIVE_DATABASE_URL = os.getenv("SHOPHIVE_DATABASE_URL", "sqlite+aiosqlite:///./shophive.db")
+if SHOPHIVE_DATABASE_URL.startswith("sqlite:///"):
+    SHOPHIVE_DATABASE_URL = SHOPHIVE_DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+
+# ============================================================================
+# Initialize Ghost Cursor Backend
+# ============================================================================
+
+ghost = GhostCursorBackend(
+    api_key=GHOST_CURSOR_API_KEY,
+    tenant_id=GHOST_CURSOR_TENANT_ID,
+    brain_dir=GHOST_CURSOR_BRAIN_DIR,
+    service_url=GHOST_CURSOR_SERVICE_URL,
+)
+
+# Attach chat store for conversation persistence
+db_engine = create_async_engine(SHOPHIVE_DATABASE_URL)
+chat_store = SQLAlchemyChatStore(db_engine, tenant_id=GHOST_CURSOR_TENANT_ID)
+ghost.attach_chat_store(chat_store)
+
+_tables_initialized = False
+
+async def ensure_tables():
+    global _tables_initialized
+    if not _tables_initialized:
+        await chat_store.create_tables()
+        _tables_initialized = True
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await ensure_tables()
+    yield
+
+# Register customer backend tools
+register_shophive_tools(ghost)
 
 # ============================================================================
 # Application Setup
@@ -55,6 +88,7 @@ app = FastAPI(
     title="ShopHive Backend API",
     description="E-commerce storefront with Ghost Cursor AI integration",
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 SESSION_SECRET = os.getenv("SHOPHIVE_SESSION_SECRET") or secrets.token_urlsafe(32)  # random per start in dev
@@ -86,37 +120,6 @@ def same_origin(request: Request) -> None:
     own = f"{request.url.scheme}://{request.url.netloc}"
     if origin and origin != own and origin not in ALLOWED_ORIGINS:
         raise HTTPException(status_code=403, detail="bad_origin")
-
-# ============================================================================
-# Initialize Ghost Cursor Backend
-# ============================================================================
-
-ghost = GhostCursorBackend(
-    api_key=GHOST_CURSOR_API_KEY,
-    tenant_id=GHOST_CURSOR_TENANT_ID,
-    brain_dir=GHOST_CURSOR_BRAIN_DIR,
-    service_url=GHOST_CURSOR_SERVICE_URL,
-)
-
-# Attach chat store for conversation persistence
-db_engine = create_async_engine(DATABASE_URL)
-chat_store = SQLAlchemyChatStore(db_engine, tenant_id=GHOST_CURSOR_TENANT_ID)
-ghost.attach_chat_store(chat_store)
-
-_tables_initialized = False
-
-async def ensure_tables():
-    global _tables_initialized
-    if not _tables_initialized:
-        await chat_store.create_tables()
-        _tables_initialized = True
-
-@app.on_event("startup")
-async def startup_event():
-    await ensure_tables()
-
-# Register customer backend tools
-register_shophive_tools(ghost)
 
 # ============================================================================
 # API Routes

@@ -1479,6 +1479,165 @@ def test_flask_blueprint():
     assert recorded_call["current_page"] == "home"
 
 
+@pytest.mark.asyncio
+async def test_session_id_isolation_in_memory_store():
+    """Two users and one InMemoryChatStore: user B sends user A's sessionId on start.
+    A's messages are unchanged, and B gets a new session with a different ID."""
+    store = InMemoryChatStore(tenant_id="tenant_test")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_test",
+    )
+    backend.attach_chat_store(store)
+
+    run_counter = 0
+
+    def mock_handler(request):
+        nonlocal run_counter
+        run_counter += 1
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": f"run_{run_counter}",
+            "revision": 0,
+            "status": "completed",
+            "reply": f"Reply to turn {run_counter}",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    # User A starts a session
+    start_a = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Message from user A",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    await backend.handle_turn(start_a, "user_a")
+
+    sessions_a = await store.list_sessions("user_a")
+    assert len(sessions_a) == 1
+    session_a_id = sessions_a[0].session_id
+
+    msgs_a = await store.get_messages(session_a_id, "user_a")
+    assert len(msgs_a) == 2
+    assert msgs_a[0].content == "Message from user A"
+
+    # User B starts a session sending User A's sessionId
+    start_b = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session_a_id,
+        "message": "Message from user B",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    await backend.handle_turn(start_b, "user_b")
+
+    # User A's messages remain intact
+    msgs_a_after = await store.get_messages(session_a_id, "user_a")
+    assert len(msgs_a_after) == 2
+    assert msgs_a_after[0].content == "Message from user A"
+
+    # User B gets a new session with a different ID
+    sessions_b = await store.list_sessions("user_b")
+    assert len(sessions_b) == 1
+    session_b_id = sessions_b[0].session_id
+    assert session_b_id != session_a_id
+
+    msgs_b = await store.get_messages(session_b_id, "user_b")
+    assert len(msgs_b) == 2
+    assert msgs_b[0].content == "Message from user B"
+
+
+@pytest.mark.asyncio
+async def test_session_id_isolation_sqlalchemy_store():
+    """SQLAlchemyChatStore with in-memory SQLite: user B sending user A's sessionId
+    does not cause an IntegrityError or drop the turn; B's turn is saved into a new session."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SQLAlchemyChatStore(engine, tenant_id="tenant_test")
+    await store.create_tables()
+
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_test",
+    )
+    backend.attach_chat_store(store)
+
+    run_counter = 0
+
+    def mock_handler(request):
+        nonlocal run_counter
+        run_counter += 1
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": f"run_sql_{run_counter}",
+            "revision": 0,
+            "status": "completed",
+            "reply": f"SQL reply {run_counter}",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    # User A starts
+    start_a = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "User A SQLite message",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    await backend.handle_turn(start_a, "user_a")
+
+    sessions_a = await store.list_sessions("user_a")
+    assert len(sessions_a) == 1
+    session_a_id = sessions_a[0].session_id
+
+    # User B starts sending User A's sessionId
+    start_b = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session_a_id,
+        "message": "User B SQLite message",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    await backend.handle_turn(start_b, "user_b")
+
+    # Verify A's messages
+    msgs_a = await store.get_messages(session_a_id, "user_a")
+    assert len(msgs_a) == 2
+    assert msgs_a[0].content == "User A SQLite message"
+
+    # Verify B's turn IS saved into a distinct session
+    sessions_b = await store.list_sessions("user_b")
+    assert len(sessions_b) == 1
+    session_b_id = sessions_b[0].session_id
+    assert session_b_id != session_a_id
+
+    msgs_b = await store.get_messages(session_b_id, "user_b")
+    assert len(msgs_b) == 2
+    assert msgs_b[0].content == "User B SQLite message"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_chat_store_rejects_duplicate_session_id():
+    """InMemoryChatStore raises ValueError if an existing session_id is passed to create_session"""
+    store = InMemoryChatStore(tenant_id="tenant_test")
+    s1 = await store.create_session("user_1", "tenant_test", title="Session 1", session_id="fixed-id-123")
+    assert s1.session_id == "fixed-id-123"
+
+    with pytest.raises(ValueError, match="session_id already exists"):
+        await store.create_session("user_2", "tenant_test", title="Session 2", session_id="fixed-id-123")
+
+
+
 
 
 

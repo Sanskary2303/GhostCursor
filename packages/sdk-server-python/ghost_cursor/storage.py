@@ -462,6 +462,8 @@ class InMemoryChatStore(ChatStore):
         session_id: Optional[str] = None,
     ) -> ChatSession:
         sess_id = session_id or str(uuid.uuid4())
+        if sess_id in self._sessions:
+            raise ValueError("session_id already exists")
         now = datetime.now(timezone.utc)
         session = ChatSession(
             session_id=sess_id,

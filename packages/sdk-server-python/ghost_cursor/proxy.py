@@ -276,20 +276,6 @@ class GhostCursorBackend:
         self.loopback = GatewayLoopback(config.tenant_id, config.api_key)
         self.chat_store = config.chat_store
 
-    @property
-    def _http_client(self) -> Optional[httpx.AsyncClient]:
-        return getattr(self, "_test_http_client", None)
-
-    @_http_client.setter
-    def _http_client(self, client: Optional[httpx.AsyncClient]):
-        if client is not None:
-            transport = getattr(client, "_transport", None)
-            if transport is not None:
-                self._get_http_client = lambda: httpx.AsyncClient(transport=transport, follow_redirects=False)
-            else:
-                self._get_http_client = lambda: client
-        self._test_http_client = client
-
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get a new HTTP client instance"""
         return httpx.AsyncClient(
@@ -701,7 +687,6 @@ class GhostCursorBackend:
                         user_id=user_id,
                         tenant_id=self.config.tenant_id,
                         title=title,
-                        session_id=str(session_id_val) if session_id_val else None,
                     )
                 session_id = session.session_id
             else:

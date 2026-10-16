@@ -2,10 +2,20 @@
 .git/
 .gitignore
 
-# Dependencies
+# Environment files
+.env*
+!.env.example
+
+# Local databases
+*.sqlite
+*.sqlite3
+*.db
+
+# Dependencies and virtual environments
 node_modules/
-.pnp
-.pnp.js
+.venv/
+venv/
+venv-*/
 
 # Build outputs
 dist/
@@ -14,39 +24,22 @@ build/
 out/
 *.tsbuildinfo
 
-# Python
+# Python artifacts
 __pycache__/
 *.py[cod]
 *$py.class
-.venv/
-venv/
-venv-*/
-.env
-.env.local
-.env.*.local
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-pytest-debug.log
-.mypy_cache/
-.dmypy.json
-dmypy.json
 *.egg-info/
+.mypy_cache/
+.pytest_cache/
 
 # Testing
 coverage/
 .nyc_output/
+.playwright-mcp/
+test-results/
+playwright-report/
 
-# Local databases
-*.sqlite
-*.sqlite3
-*.db
-
-# IDE/Editor
+# Editor and OS
 .idea/
 .vscode/
 *.swp
@@ -54,32 +47,3 @@ coverage/
 *~
 .DS_Store
 *.log
-*.log.*
-
-# Terraform
-*.tfstate
-*.tfstate.*
-*.tfplan
-.terraform/
-
-# Secrets
-*.pem
-*.key
-*.crt
-secrets/
-*.env.secret
-
-# OS
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-
-# Documentation (not needed in container)
-docs/
-*.md
-!README.md
-
-# Development files
-*.sh
-*.bat
-Makefile

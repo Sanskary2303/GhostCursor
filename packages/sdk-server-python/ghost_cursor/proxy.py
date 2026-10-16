@@ -126,12 +126,17 @@ class GhostCursorConfig(BaseModel):
     @classmethod
     def validate_service_url(cls, v: str) -> str:
         parsed = urlsplit(v)
-        if not parsed.scheme or not parsed.hostname:
-            raise ValueError("service_url must have a scheme and host")
         if parsed.scheme not in ("http", "https"):
             raise ValueError("service_url scheme must be https or http")
-        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
-            raise ValueError("http service_url is only allowed for localhost, 127.0.0.1, or ::1")
+        if not parsed.hostname:
+            raise ValueError("service_url must have a host")
+        is_local = (
+            parsed.hostname in ("localhost", "127.0.0.1", "::1")
+            or "." not in parsed.hostname
+            or parsed.hostname.endswith((".local", ".internal"))
+        )
+        if parsed.scheme == "http" and not is_local:
+            raise ValueError("http service_url is only allowed for localhost, 127.0.0.1, or internal hosts")
         if parsed.username or parsed.password:
             raise ValueError("service_url must not contain username or password")
         if parsed.query or parsed.fragment:

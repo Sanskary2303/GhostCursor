@@ -87,11 +87,14 @@ export function validateServiceUrl(rawUrl: string): string {
   const isLocal =
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||
-    hostname === "::1";
+    hostname === "::1" ||
+    !hostname.includes(".") ||
+    hostname.endsWith(".local") ||
+    hostname.endsWith(".internal");
 
   if (parsed.protocol === "http:") {
     if (!isLocal) {
-      throw new Error(`Invalid serviceUrl: http is only allowed for localhost, got "${parsed.hostname}"`);
+      throw new Error(`Invalid serviceUrl: http is only allowed for localhost or internal hosts, got "${parsed.hostname}"`);
     }
   } else if (parsed.protocol !== "https:") {
     throw new Error(`Invalid serviceUrl: scheme must be https or http (localhost), got "${parsed.protocol}"`);

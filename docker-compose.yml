@@ -1,0 +1,68 @@
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-ghost_cursor}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-ghost_cursor}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: .
+      target: api
+    command: python -m app.migrate
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-ghost_cursor}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      target: api
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-ghost_cursor}
+      GHOST_STORE: postgres
+      GHOST_PROVIDER: ${GHOST_PROVIDER:-mock}
+      GHOST_ENV: ${GHOST_ENV:-development}
+      GHOST_CURSOR_API_KEY: ${GHOST_CURSOR_API_KEY:-test-key-shophive-demo-0123456789abcdef}
+      GHOST_TENANT_KEYS: '${GHOST_TENANT_KEYS}'
+      GHOST_RATE_LIMIT_PER_MIN: ${GHOST_RATE_LIMIT_PER_MIN:-100000}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      db:
+        condition: service_healthy
+
+  demo:
+    build:
+      context: .
+      target: demo
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      GHOST_CURSOR_API_KEY: ${GHOST_CURSOR_API_KEY:-test-key-shophive-demo-0123456789abcdef}
+      GHOST_CURSOR_TENANT_ID: ${GHOST_CURSOR_TENANT_ID:-shophive_demo}
+      GHOST_CURSOR_SERVICE_URL: ${GHOST_CURSOR_SERVICE_URL:-http://api:8080}
+      SHOPHIVE_DATABASE_URL: sqlite+aiosqlite:///./shophive.db
+      SHOPHIVE_ALLOWED_ORIGINS: ${SHOPHIVE_ALLOWED_ORIGINS:-http://localhost:8081,http://127.0.0.1:8081}
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres_data:

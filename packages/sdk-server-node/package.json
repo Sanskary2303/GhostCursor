@@ -1,0 +1,39 @@
+{
+  "name": "@ghost-cursor/server",
+  "version": "0.1.0",
+  "description": "Ghost Cursor Node Server SDK - Dependency-free gateway adapter for Ghost Cursor Cloud",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.0.5"
+  },
+  "keywords": [
+    "ghost-cursor",
+    "sdk",
+    "gateway",
+    "backend",
+    "node"
+  ],
+  "author": "Ghost Cursor Team",
+  "license": "MIT"
+}
+

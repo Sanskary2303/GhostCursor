@@ -404,10 +404,6 @@ class GhostCursorBackend:
         if response.toolCalls or response.status == "awaiting_tools":
             raise GatewayError(502, "tool_round_limit")
 
-        # Persist chat history if store available
-        if self.chat_store:
-            await self._persist_turn(payload, response, user_id)
-
         # Return public projection (exclude toolCalls, brain, etc.)
         public_resp = self._project_public_response(response)
 
@@ -436,6 +432,12 @@ class GhostCursorBackend:
 
         if BRAIN_CANARY in json.dumps(result):
             raise GatewayError(502, "disclosure_blocked")
+
+        if self.chat_store:
+            safe_response = response.model_copy(
+                update={"reply": result["reply"], "actions": result["actions"]}
+            )
+            await self._persist_turn(payload, safe_response, user_id)
 
         return result
 

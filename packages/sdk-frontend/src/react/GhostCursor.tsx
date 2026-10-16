@@ -6,13 +6,15 @@ import { GhostCursorProvider } from './GhostCursorProvider';
 import type { GhostCursorProps } from './types';
 import { createGhostCursor } from '../core/SDK';
 
+const NO_TARGETS: NonNullable<GhostCursorProps['targets']> = {};
+
 export const GhostCursor = forwardRef<HTMLDivElement, GhostCursorProps>((props, ref) => {
   const {
     apiEndpoint = '/api/ghost-cursor',
     theme = { primaryColor: '#0052FF', cursorColor: '#FF4D4D', position: 'bottom-right' },
     requireApprovalForActions = true,
     allowSemanticLookup = false,
-    targets = {},
+    targets = NO_TARGETS,
     onMessage,
     onActionsRequested,
     context,

@@ -129,6 +129,26 @@ test('typing card number on checkout does not leak to context.values or targets'
   }
 });
 
+test('typing ZIP code on checkout sends fresh context value', async ({ page }) => {
+  const requests: any[] = [];
+  page.on('request', r => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/ghost-cursor')) {
+      try {
+        requests.push(r.postDataJSON());
+      } catch {}
+    }
+  });
+
+  await page.goto('/checkout');
+  await page.locator('[data-ghost-id="checkout.zip"]').fill('94105');
+
+  await ask(page, 'Help with checkout');
+  await expect(chat(page)).toBeVisible({ timeout: 20_000 });
+
+  expect(requests.length).toBeGreaterThan(0);
+  expect(requests[0].context?.values?.['checkout.zip']).toBe('94105');
+});
+
 test('target registry enforces allowed operations and resolves via registered resolve()', async ({ page }) => {
   await page.goto('/');
 

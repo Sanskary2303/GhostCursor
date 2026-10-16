@@ -158,7 +158,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       requireApprovalForActions,
       initialContext: { page: getPage(), values: {}, availableTargets: [] },
       onSendMessage: async (msg: string, ctx: any) => {
-        const rawCtx = contextProvider.getContext();
+        const rawCtx = contextProvider.captureContext();
         const pageContext = {
           page: rawCtx?.page ?? getPage(),
           values: rawCtx?.values ?? {},
@@ -237,11 +237,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   async function sendMessage(message: string): Promise<void> {
     if (isDisposed) throw new Error('SDK is disposed');
 
-    let rawCtx = contextProvider.getContext();
-    if (!rawCtx) {
-      contextProvider.captureContext();
-      rawCtx = contextProvider.getContext();
-    }
+    const rawCtx = contextProvider.captureContext();
 
     const pageContext = {
       page: rawCtx?.page ?? getPage(),

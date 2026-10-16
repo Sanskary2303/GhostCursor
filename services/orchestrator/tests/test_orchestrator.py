@@ -635,9 +635,9 @@ async def test_terminal_run_continuation_and_cancellation(auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_turn_limit_enforcement(auth_headers):
+async def test_turn_limit_enforcement(app, auth_headers):
     """Turn limit enforces max turns for continue but permits cancel"""
-    from services.orchestrator.app.main import run_store
+    run_store = app.state.store
 
     payload = {
         "protocolVersion": "1",
@@ -870,10 +870,10 @@ async def test_security_headers_present_on_200_response():
 
 
 @pytest.mark.asyncio
-async def test_expired_run_returns_410(auth_headers):
+async def test_expired_run_returns_410(app, auth_headers):
     """A run whose expires_at is set in the past returns 410 run_expired"""
     from datetime import datetime, timezone, timedelta
-    from services.orchestrator.app.main import run_store
+    run_store = app.state.store
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

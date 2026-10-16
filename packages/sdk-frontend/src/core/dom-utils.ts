@@ -141,8 +141,8 @@ function resolveById(targetId: string): HTMLElement | null {
  */
 function resolveByAria(targetId: string): HTMLElement | null {
   // Try aria-label
-  let selector = `[aria-label="${escapeSelector(targetId)}"]`;
-  let element = document.querySelector<HTMLElement>(selector);
+  const selector = `[aria-label="${escapeSelector(targetId)}"]`;
+  const element = document.querySelector<HTMLElement>(selector);
   if (element) return element;
 
   // Try aria-labelledby pointing to an element with matching id
@@ -224,7 +224,10 @@ function resolveByText(targetId: string): HTMLElement | null {
  * Escapes a string for use in a CSS selector
  */
 function escapeSelector(str: string): string {
-  return CSS.escape(str);
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return CSS.escape(str);
+  }
+  return str.replace(new RegExp('[ !"#$%&\'()*+,./:;<=>?@[\\]\\\\^`{|}~]', 'g'), '\\$&');
 }
 
 /**

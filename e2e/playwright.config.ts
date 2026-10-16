@@ -1,8 +1,13 @@
 import { defineConfig } from '@playwright/test';
+import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 const root = path.resolve(__dirname, '..');
-const py = path.join(root, '.venv/bin/python');
+const venvPy = path.join(root, '.venv/bin/python');
+const py = process.env.PYTHON_BIN || (fs.existsSync(venvPy) ? venvPy : 'python3');
 
 const testKey = 'test-key-shophive-demo-0123456789abcdef';
 const sharedEnv = {

@@ -18,7 +18,7 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, Request, HTTPException, Depends, Header
+from fastapi import FastAPI, Request, HTTPException, Depends, Header, APIRouter
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -127,36 +127,73 @@ def init_globals():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager"""
-    global run_store, vertex_client, loopback_handler
+    store = getattr(app.state, "store", None) or run_store
+    provider = getattr(app.state, "provider", None) or vertex_client
 
-    init_globals()
-
-    if isinstance(run_store, PostgreSQLRunStore):
-        await run_store.initialize()
+    if isinstance(store, PostgreSQLRunStore):
+        await store.initialize()
         logger.info("Initialized PostgreSQL run store")
 
     yield
 
     # Cleanup
-    if run_store:
-        await run_store.close()
-    if vertex_client and hasattr(vertex_client, 'close'):
-        await vertex_client.close()
+    if store and hasattr(store, "close"):
+        await store.close()
+    if provider and hasattr(provider, "close"):
+        await provider.close()
 
-
-app = FastAPI(
-    title="Ghost Cursor Orchestrator",
-    description="AI Co-pilot orchestration service with Google ADK and Vertex AI",
-    version="0.1.0",
-    lifespan=lifespan,
-)
 
 # Note: In-memory rate limiting is per-instance, not distributed across multiple workers/nodes.
 RATE_LIMIT_STORE: Dict[str, collections.deque] = {}
 rate_limit_store = RATE_LIMIT_STORE
 
 
-@app.middleware("http")
+def _get_store(request: Request) -> RunStore:
+    global run_store
+    if getattr(request.app.state, "store", None) is not None:
+        if (
+            run_store is not None
+            and getattr(request.app.state, "_initial_store", None) is not run_store
+            and request.app.state.store is not run_store
+        ):
+            return run_store
+        return request.app.state.store
+    if run_store is not None:
+        return run_store
+    raise RuntimeError("RunStore not initialized")
+
+
+def _get_provider(request: Request) -> BaseVertexClient:
+    global vertex_client
+    if getattr(request.app.state, "provider", None) is not None:
+        if (
+            vertex_client is not None
+            and getattr(request.app.state, "_initial_provider", None) is not vertex_client
+            and request.app.state.provider is not vertex_client
+        ):
+            return vertex_client
+        return request.app.state.provider
+    if vertex_client is not None:
+        return vertex_client
+    raise RuntimeError("Vertex client not initialized")
+
+
+def _get_tenant_keys(request: Request) -> Dict[str, str]:
+    global TENANT_KEYS
+    if getattr(request.app.state, "tenant_keys", None) is not None:
+        if (
+            TENANT_KEYS is not None
+            and getattr(request.app.state, "_initial_tenant_keys", None) is not TENANT_KEYS
+            and request.app.state.tenant_keys is not TENANT_KEYS
+        ):
+            return TENANT_KEYS
+        return request.app.state.tenant_keys
+    return TENANT_KEYS
+
+
+router = APIRouter()
+
+
 async def security_and_limits_middleware(request: Request, call_next):
     if request.method == "POST":
         content_length_header = request.headers.get("content-length")
@@ -232,6 +269,7 @@ async def security_and_limits_middleware(request: Request, call_next):
 # ============================================================================
 
 async def verify_tenant_credentials(
+    request: Request,
     authorization: str = Header(...),
     x_ghost_subject: str = Header(..., alias="X-Ghost-Subject"),
 ) -> Tuple[str, str]:
@@ -245,8 +283,10 @@ async def verify_tenant_credentials(
 
     api_key = authorization[7:]  # Remove "Bearer "
 
+    keys = _get_tenant_keys(request)
+
     matched_tenant = None
-    for k, t in TENANT_KEYS.items():
+    for k, t in keys.items():
         if hmac.compare_digest(k.encode(), api_key.encode()):
             matched_tenant = t
 
@@ -273,7 +313,7 @@ def reject_origin_requests(request: Request):
 # Health Check
 # ============================================================================
 
-@app.get("/health")
+@router.get("/health")
 async def health_check():
     """Liveness probe - no secrets required"""
     return {
@@ -298,7 +338,7 @@ def _register_pending(response: HostedRunResponse, run_state: RunState) -> None:
 # Hosted API Endpoints
 # ============================================================================
 
-@app.post("/v1/runs", response_model=HostedRunResponse)
+@router.post("/v1/runs", response_model=HostedRunResponse)
 async def create_run(
     request: HostedCreateRunRequest,
     http_request: Request,
@@ -312,6 +352,8 @@ async def create_run(
 
     tenant_id, subject = tenant_subject
     init_globals()
+    store = _get_store(http_request)
+    provider = _get_provider(http_request)
 
     try:
         # Validate and normalize customer tools
@@ -339,9 +381,9 @@ async def create_run(
             revision=-1,  # Pending revision
         )
 
-        inserted_id = await run_store.create_pending(run_state)
+        inserted_id = await store.create_pending(run_state)
         if not inserted_id:
-            existing_run = await run_store.get_by_request_id(tenant_id, subject, request.requestId)
+            existing_run = await store.get_by_request_id(tenant_id, subject, request.requestId)
             if not existing_run:
                 raise HTTPException(status_code=409, detail="in_progress")
             if existing_run.is_expired:
@@ -379,7 +421,7 @@ async def create_run(
             "parts": [{"text": request.message}],
         })
         prune_transcript(run_state.transcript, max_parts=40)
-        response = await _run_agent_turn(agent, run_state, request.message)
+        response = await _run_agent_turn(agent, run_state, request.message, provider=provider)
         _register_pending(response, run_state)
         response.revision = 0
 
@@ -394,7 +436,7 @@ async def create_run(
         })
 
         # Save run
-        await run_store.save(run_state)
+        await store.save(run_state)
 
         return response
 
@@ -405,7 +447,7 @@ async def create_run(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.post("/v1/runs/{run_id}/continue", response_model=HostedRunResponse)
+@router.post("/v1/runs/{run_id}/continue", response_model=HostedRunResponse)
 async def continue_run(
     run_id: str,
     request: HostedContinueRunRequest,
@@ -419,9 +461,11 @@ async def continue_run(
 
     tenant_id, subject = tenant_subject
     init_globals()
+    store = _get_store(http_request)
+    provider = _get_provider(http_request)
 
     try:
-        async with run_store.locked(run_id, tenant_id, subject) as (run_state, save):
+        async with store.locked(run_id, tenant_id, subject) as (run_state, save):
             # Load run
             if not run_state:
                 raise HTTPException(status_code=404, detail="Run not found")
@@ -460,11 +504,11 @@ async def continue_run(
             run_state.revision = target_revision
             run_state.latest_kind = request.kind
             if request.kind == "tools":
-                response = await _handle_tool_results(run_state, request.results)
+                response = await _handle_tool_results(run_state, request.results, provider=provider)
             elif request.kind == "actions":
-                response = await _handle_action_results(run_state, request.results, request.context)
+                response = await _handle_action_results(run_state, request.results, request.context, provider=provider)
             elif request.kind == "answer":
-                response = await _handle_user_answer(run_state, request.answer, request.context)
+                response = await _handle_user_answer(run_state, request.answer, request.context, provider=provider)
             elif request.kind == "cancel":
                 response = await _handle_cancellation(run_state)
             else:
@@ -501,14 +545,20 @@ async def continue_run(
 # Agent Execution Helpers
 # ============================================================================
 
-async def _run_agent_turn(agent: GhostAgent, run_state: RunState, user_message: str) -> HostedRunResponse:
+async def _run_agent_turn(
+    agent: GhostAgent,
+    run_state: RunState,
+    user_message: str,
+    provider: Optional[BaseVertexClient] = None,
+) -> HostedRunResponse:
     """Run a single agent turn and return response"""
-    if not vertex_client:
+    active_provider = provider or vertex_client
+    if not active_provider:
         raise RuntimeError("Vertex client not initialized")
 
     # Generate response using Vertex AI
     try:
-        response = await vertex_client.generate_content(
+        response = await active_provider.generate_content(
             agent=agent,
             user_message=user_message,
             run_context=run_state.to_agent_context(),
@@ -594,6 +644,7 @@ async def _run_agent_turn(agent: GhostAgent, run_state: RunState, user_message: 
 async def _handle_tool_results(
     run_state: RunState,
     results: Optional[List[ToolCallResponse]],
+    provider: Optional[BaseVertexClient] = None,
 ) -> HostedRunResponse:
     """Handle tool execution results from gateway"""
     run_state.latest_tool_results = results or []
@@ -639,7 +690,7 @@ async def _handle_tool_results(
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 
-    response = await _run_agent_turn(agent, run_state, "")
+    response = await _run_agent_turn(agent, run_state, "", provider=provider)
 
     return response
 
@@ -648,6 +699,7 @@ async def _handle_action_results(
     run_state: RunState,
     results: Optional[List[ToolCallResponse]],
     updated_context: Optional[Any],
+    provider: Optional[BaseVertexClient] = None,
 ) -> HostedRunResponse:
     """Handle frontend action execution results"""
     run_state.latest_action_results = results or []
@@ -704,7 +756,7 @@ async def _handle_action_results(
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 
-    response = await _run_agent_turn(agent, run_state, "")
+    response = await _run_agent_turn(agent, run_state, "", provider=provider)
 
     return response
 
@@ -713,6 +765,7 @@ async def _handle_user_answer(
     run_state: RunState,
     answer: Optional[str],
     updated_context: Optional[Any],
+    provider: Optional[BaseVertexClient] = None,
 ) -> HostedRunResponse:
     """Handle user answer to clarification question"""
     if answer:
@@ -734,7 +787,7 @@ async def _handle_user_answer(
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 
-    response = await _run_agent_turn(agent, run_state, answer or "")
+    response = await _run_agent_turn(agent, run_state, answer or "", provider=provider)
 
     return response
 
@@ -754,7 +807,6 @@ async def _handle_cancellation(run_state: RunState) -> HostedRunResponse:
 # Error Handlers
 # ============================================================================
 
-@app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
         status_code=exc.status_code,
@@ -766,7 +818,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
 
 
-@app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = []
     for err in exc.errors():
@@ -785,7 +836,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-@app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error(f"Unhandled exception: {exc}", exc_info=True)
     return JSONResponse(
@@ -796,3 +846,53 @@ async def general_exception_handler(request: Request, exc: Exception):
             "X-Content-Type-Options": "nosniff",
         },
     )
+
+
+# ============================================================================
+# App Factory
+# ============================================================================
+
+def create_app(
+    *,
+    store: Optional[RunStore] = None,
+    provider: Optional[BaseVertexClient] = None,
+    tenant_keys: Optional[Dict[str, str]] = None,
+) -> FastAPI:
+    """Application factory for Ghost Cursor Orchestrator"""
+    global run_store, vertex_client, loopback_handler, TENANT_KEYS
+
+    if tenant_keys is None:
+        tenant_keys = TENANT_KEYS if TENANT_KEYS else load_tenant_keys()
+
+    if store is None or provider is None:
+        init_globals()
+        if store is None:
+            store = run_store
+        if provider is None:
+            provider = vertex_client
+
+    app_instance = FastAPI(
+        title="Ghost Cursor Orchestrator",
+        description="AI Co-pilot orchestration service with Google ADK and Vertex AI",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+    app_instance.state.store = store
+    app_instance.state._initial_store = store
+    app_instance.state.provider = provider
+    app_instance.state._initial_provider = provider
+    app_instance.state.tenant_keys = tenant_keys
+    app_instance.state._initial_tenant_keys = tenant_keys
+
+    app_instance.middleware("http")(security_and_limits_middleware)
+    app_instance.include_router(router)
+    app_instance.add_exception_handler(HTTPException, http_exception_handler)
+    app_instance.add_exception_handler(RequestValidationError, validation_exception_handler)
+    app_instance.add_exception_handler(Exception, general_exception_handler)
+
+    return app_instance
+
+
+# Module-level default app instance
+init_globals()
+app = create_app(store=run_store, provider=vertex_client, tenant_keys=TENANT_KEYS)

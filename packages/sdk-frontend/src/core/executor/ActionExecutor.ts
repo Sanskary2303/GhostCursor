@@ -37,7 +37,9 @@ async function animateCursorTo(element: HTMLElement, onCursorMove: (el: HTMLElem
   const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   // Scroll element into view
-  element.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center', inline: 'center' });
+  if (typeof element.scrollIntoView === 'function') {
+    element.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center', inline: 'center' });
+  }
 
   // Wait for scroll to complete
   if (!reduced) {

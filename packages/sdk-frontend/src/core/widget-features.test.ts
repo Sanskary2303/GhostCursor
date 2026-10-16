@@ -39,7 +39,7 @@ const setupMockDOM = () => {
     innerHeight: 768,
     addEventListener: vi.fn(),
     removeEventListener: vi.fn(),
-    requestAnimationFrame: (cb: Function) => setTimeout(cb, 16),
+    requestAnimationFrame: (cb: (...args: any[]) => void) => setTimeout(cb, 16),
     cancelAnimationFrame: (id: any) => clearTimeout(id),
   };
 

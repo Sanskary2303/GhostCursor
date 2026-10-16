@@ -89,7 +89,7 @@ export function validateServiceUrl(rawUrl: string, insecureHttpHosts: string[] =
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||
     hostname === "::1" ||
-    insecureHttpHosts.includes(hostname);
+    insecureHttpHosts.map((h) => h.toLowerCase()).includes(hostname);
 
   if (parsed.protocol === "http:") {
     if (!isLocal) {

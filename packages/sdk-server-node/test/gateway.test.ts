@@ -27,6 +27,7 @@ describe("Gateway URL Validation", () => {
     expect(() => validateServiceUrl("http://metadata.google.internal")).toThrow(/http is only allowed for localhost/);
 
     expect(validateServiceUrl("http://api:8080", ["api"])).toBe("http://api:8080");
+    expect(validateServiceUrl("http://api:8080", ["API"])).toBe("http://api:8080");
   });
 
   it("rejects credentials, queries, and fragments", () => {

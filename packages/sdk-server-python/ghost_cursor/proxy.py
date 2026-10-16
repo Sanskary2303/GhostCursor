@@ -124,7 +124,7 @@ class GhostCursorConfig(BaseModel):
     filter_response: Optional[Callable[[dict, str], Awaitable[dict]]] = None
 
     insecure_http_hosts: List[str] = Field(
-        default_factory=lambda: [h.strip() for h in os.getenv("GHOST_CURSOR_INSECURE_HTTP_HOSTS", "").split(",") if h.strip()]
+        default_factory=lambda: [h.strip().lower() for h in os.getenv("GHOST_CURSOR_INSECURE_HTTP_HOSTS", "").split(",") if h.strip()]
     )
 
     @model_validator(mode="after")
@@ -134,7 +134,7 @@ class GhostCursorConfig(BaseModel):
             raise ValueError("service_url scheme must be https or http")
         if not parsed.hostname:
             raise ValueError("service_url must have a host")
-        allowed_http = {"localhost", "127.0.0.1", "::1", *self.insecure_http_hosts}
+        allowed_http = {"localhost", "127.0.0.1", "::1", *(h.lower() for h in self.insecure_http_hosts)}
         if parsed.scheme == "http" and parsed.hostname not in allowed_http:
             raise ValueError("http service_url is only allowed for localhost or hosts listed in insecure_http_hosts")
         if parsed.username or parsed.password:

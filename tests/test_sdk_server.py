@@ -972,6 +972,14 @@ def test_service_url_validation():
     )
     assert cfg_insecure.service_url == "http://api:8080"
 
+    # insecure_http_hosts=["API"] accepts http://api:8080
+    cfg_case = GhostCursorConfig(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        service_url="http://api:8080",
+        insecure_http_hosts=["API"],
+    )
+    assert cfg_case.service_url == "http://api:8080"
+
 
 @pytest.mark.asyncio
 async def test_upstream_too_large_streaming():

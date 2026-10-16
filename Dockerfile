@@ -55,7 +55,7 @@ CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
 # ============================================================================
 # Stage 3: Node Frontend Builder
 # ============================================================================
-FROM node:20-slim AS node-builder
+FROM node:22-slim AS node-builder
 
 WORKDIR /build
 

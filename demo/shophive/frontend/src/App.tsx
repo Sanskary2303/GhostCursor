@@ -20,7 +20,7 @@ import {
   reResolveElement,
 } from '@ghost-cursor/sdk';
 
-if (typeof window !== 'undefined') {
+if (typeof window !== 'undefined' && import.meta.env.VITE_E2E_HOOKS === '1') {
   (window as any).__GHOST_CURSOR_SDK__ = {
     ActionExecutor,
     registerTarget,

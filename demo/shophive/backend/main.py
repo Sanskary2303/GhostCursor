@@ -132,8 +132,11 @@ async def get_product(product_id: str):
 
 @app.post("/api/login", dependencies=[Depends(same_origin)])
 async def login(request: Request):
-    data = await request.json()
-    username = data.get("username")
+    try:
+        data = await request.json()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid_json")
+    username = data.get("username") if isinstance(data, dict) else None
     if username in DEMO_USERS:
         request.session["user_id"] = DEMO_USERS[username]
         request.session["username"] = username

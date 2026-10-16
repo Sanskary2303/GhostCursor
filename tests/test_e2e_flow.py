@@ -218,3 +218,19 @@ async def test_order_lookup_ownership_authorization(monkeypatch):
         assert "not found" in data["reply"].lower()
 
 
+@pytest.mark.asyncio
+async def test_login_invalid_body():
+    """POST /api/login with non-JSON body returns 400, and non-dict JSON returns 401."""
+    shop_transport = ASGITransport(app=shop_app)
+    headers = {"Origin": "http://localhost:8081"}
+    async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        res_not_json = await client.post("/api/login", content=b"not json", headers=headers)
+        assert res_not_json.status_code == 400
+        assert res_not_json.json()["detail"] == "invalid_json"
+
+        res_non_dict = await client.post("/api/login", json=[1], headers=headers)
+        assert res_non_dict.status_code == 401
+        assert res_non_dict.json()["detail"] == "invalid_credentials"
+
+
+

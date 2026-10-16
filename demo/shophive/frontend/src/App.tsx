@@ -10,7 +10,26 @@ import { OrderTracking } from './pages/OrderTracking';
 import { Settings } from './pages/Settings';
 
 // [GHOST-CURSOR INTEGRATION - STEP 1: IMPORT SDK COMPONENT]
-import { GhostCursor } from '@ghost-cursor/sdk';
+import {
+  GhostCursor,
+  ActionExecutor,
+  registerTarget,
+  getRegisteredTarget,
+  clearTargetRegistry,
+  resolveTargetWithCascade,
+  reResolveElement,
+} from '@ghost-cursor/sdk';
+
+if (typeof window !== 'undefined') {
+  (window as any).__GHOST_CURSOR_SDK__ = {
+    ActionExecutor,
+    registerTarget,
+    getRegisteredTarget,
+    clearTargetRegistry,
+    resolveTargetWithCascade,
+    reResolveElement,
+  };
+}
 
 const ROUTE_PAGES: Record<string, string> = { '/': 'home', '/cart': 'cart', '/checkout': 'checkout', '/orders': 'orders', '/settings': 'settings' };
 const ghostContext = {

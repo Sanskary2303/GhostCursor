@@ -129,5 +129,109 @@ test('typing card number on checkout does not leak to context.values or targets'
   }
 });
 
+test('target registry enforces allowed operations and resolves via registered resolve()', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const sdk = (window as any).__GHOST_CURSOR_SDK__;
+    sdk.clearTargetRegistry();
+
+    let clicked = false;
+    const testEl = document.createElement('button');
+    testEl.id = 'registered-button-test';
+    testEl.textContent = 'Registered Click Test';
+    testEl.style.width = '120px';
+    testEl.style.height = '40px';
+    testEl.onclick = () => { clicked = true; };
+    document.body.appendChild(testEl);
+
+    sdk.registerTarget('custom_btn', {
+      page: 'home',
+      resolve: () => document.getElementById('registered-button-test'),
+      operations: ['click'],
+    });
+
+    const executor = new sdk.ActionExecutor({ timeout: 500 });
+
+    // 1. Trying fill_input on click-only target
+    const fillRes = await executor.execute([
+      { id: '1', type: 'fill_input', target_id: 'custom_btn', value: 'hello' },
+    ]);
+
+    // 2. Trying click on click-only target
+    const clickRes = await executor.execute([
+      { id: '2', type: 'click', target_id: 'custom_btn' },
+    ]);
+
+    document.body.removeChild(testEl);
+    return { fillRes, clickRes, clicked };
+  });
+
+  expect(result.fillRes.success).toBe(false);
+  expect(result.fillRes.results[0].error).toBe('operation not allowed');
+  expect(result.clickRes.success).toBe(true);
+  expect(result.clickRes.results[0].ok).toBe(true);
+  expect(result.clicked).toBe(true);
+});
+
+test('semantic text lookup is disabled by default and only works when opted in', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const sdk = (window as any).__GHOST_CURSOR_SDK__;
+    sdk.clearTargetRegistry();
+
+    const btn = document.createElement('button');
+    btn.textContent = 'UniqueSemanticButtonText';
+    document.body.appendChild(btn);
+
+    // Default resolution: semantic lookup should be false
+    const defaultRes = await sdk.resolveTargetWithCascade('UniqueSemanticButtonText', { timeout: 300 });
+
+    // Opt-in resolution: semantic lookup enabled
+    const optInRes = await sdk.resolveTargetWithCascade('UniqueSemanticButtonText', {
+      timeout: 300,
+      allowSemanticLookup: true,
+    });
+
+    document.body.removeChild(btn);
+    return {
+      defaultMatched: defaultRes.matched,
+      optInMatched: optInRes.matched,
+      optInLevel: optInRes.level,
+    };
+  });
+
+  expect(result.defaultMatched).toBe(false);
+  expect(result.optInMatched).toBe(true);
+  expect(result.optInLevel).toBe(5);
+});
+
+test('invalid target_id formats are rejected with error invalid target id', async ({ page }) => {
+  await page.goto('/');
+
+  const result = await page.evaluate(async () => {
+    const sdk = (window as any).__GHOST_CURSOR_SDK__;
+    const executor = new sdk.ActionExecutor();
+
+    const resSpace = await executor.execute([
+      { id: '1', type: 'click', target_id: 'bad id with space' },
+    ]);
+
+    const resSpecial = await executor.execute([
+      { id: '2', type: 'fill_input', target_id: 'bad#id$!', value: 'test' },
+    ]);
+
+    return {
+      spaceError: resSpace.results[0]?.error,
+      specialError: resSpecial.results[0]?.error,
+    };
+  });
+
+  expect(result.spaceError).toBe('invalid target id');
+  expect(result.specialError).toBe('invalid target id');
+});
+
+
 
 

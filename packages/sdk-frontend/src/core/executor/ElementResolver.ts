@@ -17,8 +17,8 @@ export class ElementResolver {
     return reResolveElement(targetId, options);
   }
 
-  register(target: Target): void {
-    registerTarget(target);
+  register(id: string, target: Target): void {
+    registerTarget(id, target);
   }
 
   createSimple(page: string | 'global', selector: string, operations?: Target['operations']): Target {

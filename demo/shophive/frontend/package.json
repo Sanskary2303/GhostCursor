@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "lint": "eslint src --ext ts,tsx"
+    "lint": "eslint src --ext ts,tsx",
+    "test": "echo 'No unit tests in shophive-frontend'",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@ghost-cursor/sdk": "*",

@@ -15,7 +15,7 @@ export interface GhostCursorSDK {
   startTour(steps: any[]): Promise<void>;
   updateContext(context: Partial<PageContext>): void;
   getContext(): PageContext | null;
-  registerTarget(target: Target): void;
+  registerTarget(id: string, target: Target): void;
 }
 
 export interface CreateGhostCursorOptions {
@@ -31,6 +31,7 @@ export interface CreateGhostCursorOptions {
   };
   requireApprovalForActions?: boolean;
   transport?: 'http' | 'websocket';
+  allowSemanticLookup?: boolean;
   onMessage?: (message: Message) => void;
   onActionsRequested?: (actions: Action[]) => void;
   onContextChange?: (context: PageContext) => void;
@@ -55,6 +56,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     mount,
     theme = {},
     requireApprovalForActions = true,
+    allowSemanticLookup = false,
     onMessage,
     onActionsRequested,
     onContextChange,
@@ -99,6 +101,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   const actionExecutor = new ActionExecutor({
     timeout: 5000,
     requireApproval: requireApprovalForActions,
+    allowSemanticLookup,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
     onCursorMove: (element) => cursorEngine.moveTo(element),
   });
@@ -174,7 +177,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
 
   // Register customer targets
   for (const [id, target] of Object.entries(targets)) {
-    registerTarget(target);
+    registerTarget(id, target);
   }
 
   /**
@@ -288,8 +291,8 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   /**
    * Register a new target
    */
-  function registerTargetFn(target: Target): void {
-    registerTarget(target);
+  function registerTargetFn(id: string, target: Target): void {
+    registerTarget(id, target);
   }
 
   /**

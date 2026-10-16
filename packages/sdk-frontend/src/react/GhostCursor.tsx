@@ -11,6 +11,8 @@ export const GhostCursor = forwardRef<HTMLDivElement, GhostCursorProps>((props, 
     apiEndpoint = '/api/ghost-cursor',
     theme = { primaryColor: '#0052FF', cursorColor: '#FF4D4D', position: 'bottom-right' },
     requireApprovalForActions = true,
+    allowSemanticLookup = false,
+    targets = {},
     onMessage,
     onActionsRequested,
     context,
@@ -32,10 +34,11 @@ export const GhostCursor = forwardRef<HTMLDivElement, GhostCursorProps>((props, 
           if (typeof context?.page === 'string') return context.page;
           return window.location.pathname.replace(/^\//, '') || 'home';
         },
-        targets: {},
+        targets,
         headers: headers || (() => ({ 'Content-Type': 'application/json' })),
         mount: mount,
         requireApprovalForActions,
+        allowSemanticLookup,
         theme: {
           primaryColor: theme?.primaryColor,
           cursorColor: theme?.cursorColor,
@@ -47,7 +50,7 @@ export const GhostCursor = forwardRef<HTMLDivElement, GhostCursorProps>((props, 
         sdk.dispose();
       };
     }
-  }, [apiEndpoint, context, headers, mount, onMessage, requireApprovalForActions, theme]);
+  }, [apiEndpoint, context, headers, mount, onMessage, requireApprovalForActions, allowSemanticLookup, targets, theme]);
 
   return React.createElement(
     GhostCursorProvider,

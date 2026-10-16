@@ -1,7 +1,11 @@
+import type { Target } from '../core/types';
+
 export interface GhostCursorProps {
   apiEndpoint?: string;
   theme?: Partial<Theme>;
   requireApprovalForActions?: boolean;
+  allowSemanticLookup?: boolean;
+  targets?: Record<string, Target>;
   onMessage?: (event: MessageEvent) => void;
   onActionsRequested?: (actions: any) => void;
   context?: {

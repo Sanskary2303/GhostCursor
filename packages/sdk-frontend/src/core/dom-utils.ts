@@ -10,12 +10,36 @@
 
 import type { Target } from './types';
 
+const registry = new Map<string, Target>();
+
+/**
+ * Registers a custom target with the SDK
+ */
+export function registerTarget(id: string, target: Target): void {
+  registry.set(id, target);
+}
+
+/**
+ * Retrieves a registered target by its ID
+ */
+export function getRegisteredTarget(id: string): Target | undefined {
+  return registry.get(id);
+}
+
+/**
+ * Clears the target registry (useful for tests or teardown)
+ */
+export function clearTargetRegistry(): void {
+  registry.clear();
+}
+
 export interface ResolutionOptions {
   timeout?: number;
   pollInterval?: number;
   allowHidden?: boolean;
   allowDisabled?: boolean;
   allowSensitive?: boolean;
+  allowSemanticLookup?: boolean;
 }
 
 export interface ResolutionResult {
@@ -31,6 +55,7 @@ const DEFAULT_OPTIONS: Required<ResolutionOptions> = {
   allowHidden: false,
   allowDisabled: false,
   allowSensitive: false,
+  allowSemanticLookup: false,
 };
 
 // Sensitive input types that should never be targeted
@@ -211,20 +236,32 @@ export async function resolveTargetWithCascade(
 ): Promise<ResolutionResult> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const startTime = Date.now();
-
-  // Resolution levels in priority order
-  const levels = [
-    { level: 1, name: 'data-ghost-id', fn: resolveByGhostId },
-    { level: 2, name: 'data-testid', fn: resolveByTestId },
-    { level: 3, name: 'id', fn: resolveById },
-    { level: 4, name: 'aria', fn: resolveByAria },
-    { level: 5, name: 'text', fn: resolveByText },
-  ];
+  const registered = getRegisteredTarget(targetId);
 
   while (Date.now() - startTime < opts.timeout) {
-    for (const level of levels) {
-      const element = level.fn(targetId);
-      if (element && isInteractable(element, opts)) return { element, level: level.level, selector: level.name, matched: true };
+    if (registered) {
+      const element = registered.resolve();
+      if (element && isInteractable(element, opts)) {
+        return { element, level: 0, selector: 'registered', matched: true };
+      }
+    } else {
+      const levels = [
+        { level: 1, name: 'data-ghost-id', fn: resolveByGhostId },
+        { level: 2, name: 'data-testid', fn: resolveByTestId },
+        { level: 3, name: 'id', fn: resolveById },
+      ];
+      if (opts.allowSemanticLookup) {
+        levels.push(
+          { level: 4, name: 'aria', fn: resolveByAria },
+          { level: 5, name: 'text', fn: resolveByText }
+        );
+      }
+      for (const level of levels) {
+        const element = level.fn(targetId);
+        if (element && isInteractable(element, opts)) {
+          return { element, level: level.level, selector: level.name, matched: true };
+        }
+      }
     }
     await new Promise(resolve => setTimeout(resolve, opts.pollInterval));
   }
@@ -243,29 +280,21 @@ export async function resolveTargetWithCascade(
  */
 export function reResolveElement(targetId: string, options: ResolutionOptions = {}): HTMLElement | null {
   const opts = { ...DEFAULT_OPTIONS, ...options };
-  const candidate = resolveByGhostId(targetId) ||
-                    resolveByTestId(targetId) ||
-                    resolveById(targetId) ||
-                    resolveByAria(targetId) ||
-                    resolveByText(targetId);
+  const registered = getRegisteredTarget(targetId);
+  if (registered) {
+    const el = registered.resolve();
+    return el && isInteractable(el, opts) ? el : null;
+  }
+  let candidate = resolveByGhostId(targetId) ||
+                  resolveByTestId(targetId) ||
+                  resolveById(targetId);
+  if (!candidate && opts.allowSemanticLookup) {
+    candidate = resolveByAria(targetId) || resolveByText(targetId);
+  }
   if (candidate && isInteractable(candidate, opts)) {
     return candidate;
   }
   return null;
-}
-
-/**
- * Registers a custom target with the SDK
- */
-export function registerTarget(target: Target): void {
-  // This would typically be stored in a registry
-  // For now, we just ensure the element can be resolved
-  if (typeof target.resolve === 'function') {
-    const element = target.resolve();
-    if (!element) {
-      console.warn(`[GhostCursor] Target registered but resolve() returned null:`, target);
-    }
-  }
 }
 
 /**

@@ -5,13 +5,14 @@
 
 import type { Action, ToolResult } from '../types';
 import { setNativeValue, setNativeSelectValue, setNativeCheckboxState, verifyValueRetained } from '../native-setter';
-import { resolveTargetWithCascade, reResolveElement, ResolutionOptions } from '../dom-utils';
+import { resolveTargetWithCascade, reResolveElement, ResolutionOptions, getRegisteredTarget } from '../dom-utils';
 
 export interface ExecutionOptions {
   timeout?: number;
   requireApproval?: boolean;
   onProgress?: (step: string, status: 'pending' | 'executing' | 'completed' | 'failed') => void;
   onCursorMove?: (element: HTMLElement) => void;
+  allowSemanticLookup?: boolean;
 }
 
 export interface ExecutionResult {
@@ -25,6 +26,7 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   requireApproval: true,
   onProgress: () => {},
   onCursorMove: () => {},
+  allowSemanticLookup: false,
 };
 
 /**
@@ -44,6 +46,14 @@ async function animateCursorTo(element: HTMLElement, onCursorMove: (el: HTMLElem
   await new Promise(resolve => setTimeout(resolve, 200));
 }
 
+const TARGET_ID_PATTERN = /^[a-zA-Z0-9_.:-]{1,120}$/;
+const OP_MAP: Record<string, string> = {
+  click: 'click',
+  fill_input: 'fill',
+  select_option: 'select',
+  toggle_switch: 'toggle',
+};
+
 /**
  * Executes a single action
  */
@@ -54,6 +64,25 @@ async function executeAction(
   const { target_id, value, target_page, explanation, state, steps } = action;
 
   try {
+    if (action.type in OP_MAP) {
+      if (!target_id || !TARGET_ID_PATTERN.test(target_id)) {
+        return {
+          id: action.id ?? crypto.randomUUID(),
+          ok: false,
+          error: 'invalid target id',
+        };
+      }
+      const registered = getRegisteredTarget(target_id);
+      const requiredOp = OP_MAP[action.type];
+      if (registered && (!registered.operations || !registered.operations.includes(requiredOp as any))) {
+        return {
+          id: action.id ?? crypto.randomUUID(),
+          ok: false,
+          error: 'operation not allowed',
+        };
+      }
+    }
+
     switch (action.type) {
       case 'navigate':
         return await executeNavigate(target_page!, options);
@@ -78,14 +107,14 @@ async function executeAction(
 
       default:
         return {
-          id: crypto.randomUUID(),
+          id: action.id ?? crypto.randomUUID(),
           ok: false,
           error: `Unknown action type: ${(action as Action).type}`,
         };
     }
   } catch (error) {
     return {
-      id: crypto.randomUUID(),
+      id: action.id ?? crypto.randomUUID(),
       ok: false,
       error: error instanceof Error ? error.message : 'Unknown execution error',
     };
@@ -128,7 +157,10 @@ async function executeNavigate(targetPage: string, options: Required<ExecutionOp
 async function executeClick(targetId: string, options: Required<ExecutionOptions>): Promise<ToolResult> {
   options.onProgress(`click:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, { timeout: options.timeout });
+  const resolution = await resolveTargetWithCascade(targetId, {
+    timeout: options.timeout,
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
@@ -136,7 +168,9 @@ async function executeClick(targetId: string, options: Required<ExecutionOptions
   const { element } = resolution;
 
   // Re-resolve immediately before acting (stale reference protection)
-  const freshElement = reResolveElement(targetId);
+  const freshElement = reResolveElement(targetId, {
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!freshElement || !document.body.contains(freshElement)) {
     return { id: crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
   }
@@ -158,7 +192,10 @@ async function executeFillInput(
 ): Promise<ToolResult> {
   options.onProgress(`fill:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, { timeout: options.timeout });
+  const resolution = await resolveTargetWithCascade(targetId, {
+    timeout: options.timeout,
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
@@ -166,7 +203,9 @@ async function executeFillInput(
   const { element } = resolution;
 
   // Re-resolve immediately before acting
-  const freshElement = reResolveElement(targetId);
+  const freshElement = reResolveElement(targetId, {
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!freshElement || !document.body.contains(freshElement)) {
     return { id: crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
   }
@@ -200,14 +239,19 @@ async function executeSelectOption(
 ): Promise<ToolResult> {
   options.onProgress(`select:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, { timeout: options.timeout });
+  const resolution = await resolveTargetWithCascade(targetId, {
+    timeout: options.timeout,
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
 
   const { element } = resolution;
 
-  const freshElement = reResolveElement(targetId);
+  const freshElement = reResolveElement(targetId, {
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!freshElement || !document.body.contains(freshElement)) {
     return { id: crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
   }
@@ -239,14 +283,19 @@ async function executeToggleSwitch(
 ): Promise<ToolResult> {
   options.onProgress(`toggle:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, { timeout: options.timeout });
+  const resolution = await resolveTargetWithCascade(targetId, {
+    timeout: options.timeout,
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
 
   const { element } = resolution;
 
-  const freshElement = reResolveElement(targetId);
+  const freshElement = reResolveElement(targetId, {
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
   if (!freshElement || !document.body.contains(freshElement)) {
     return { id: crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
   }
@@ -278,7 +327,10 @@ async function executeGuidedTour(steps: any[], options: Required<ExecutionOption
     options.onProgress(`tour:step:${i + 1}`, 'executing');
 
     if (step.target_id) {
-      const resolution = await resolveTargetWithCascade(step.target_id, { timeout: options.timeout });
+      const resolution = await resolveTargetWithCascade(step.target_id, {
+        timeout: options.timeout,
+        allowSemanticLookup: options.allowSemanticLookup,
+      });
       if (resolution.element) {
         await animateCursorTo(resolution.element, options.onCursorMove);
 

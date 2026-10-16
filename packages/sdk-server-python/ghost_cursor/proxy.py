@@ -275,23 +275,32 @@ class GhostCursorBackend:
         self.tool_registry = ToolRegistry()
         self.loopback = GatewayLoopback(config.tenant_id, config.api_key)
         self.chat_store = config.chat_store
-        self._http_client: Optional[httpx.AsyncClient] = None
+
+    @property
+    def _http_client(self) -> Optional[httpx.AsyncClient]:
+        return getattr(self, "_test_http_client", None)
+
+    @_http_client.setter
+    def _http_client(self, client: Optional[httpx.AsyncClient]):
+        if client is not None:
+            transport = getattr(client, "_transport", None)
+            if transport is not None:
+                self._get_http_client = lambda: httpx.AsyncClient(transport=transport, follow_redirects=False)
+            else:
+                self._get_http_client = lambda: client
+        self._test_http_client = client
 
     async def _get_http_client(self) -> httpx.AsyncClient:
-        """Get or create HTTP client"""
-        if self._http_client is None:
-            self._http_client = httpx.AsyncClient(
-                timeout=httpx.Timeout(self.config.request_timeout),
-                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
-                follow_redirects=False,
-            )
-        return self._http_client
+        """Get a new HTTP client instance"""
+        return httpx.AsyncClient(
+            timeout=httpx.Timeout(self.config.request_timeout),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            follow_redirects=False,
+        )
 
     async def close(self):
-        """Close HTTP client"""
-        if self._http_client:
-            await self._http_client.aclose()
-            self._http_client = None
+        """Close HTTP client (noop; clients are scoped to handle_turn lifecycle)"""
+        pass
 
     def attach_chat_store(self, chat_store: ChatStore):
         """Attach a chat store for conversation persistence"""
@@ -380,116 +389,146 @@ class GhostCursorBackend:
         except ValidationError:
             raise GatewayError(400, "invalid_request")
 
-        if isinstance(req_model, BrowserStart):
-            # Load brain context
-            page = current_page or req_model.context.page
-            brain_content = self.brain_loader.load_context(page)
+        raw_client = self._get_http_client()
+        client = await raw_client if inspect.isawaitable(raw_client) else raw_client
+        async with client:
+            if isinstance(req_model, BrowserStart):
+                # Load brain context
+                page = current_page or req_model.context.page
+                brain_content = self.brain_loader.load_context(page)
 
-            hosted_request = HostedRunRequest(
-                protocolVersion=req_model.protocolVersion,
-                requestId=str(req_model.requestId),
-                message=req_model.message,
-                context=req_model.context.model_dump(),
-                brain=brain_content,
-                capabilities=[],
-                tools=self.get_tool_declarations(),
-            )
+                hosted_request = HostedRunRequest(
+                    protocolVersion=req_model.protocolVersion,
+                    requestId=str(req_model.requestId),
+                    message=req_model.message,
+                    context=req_model.context.model_dump(),
+                    brain=brain_content,
+                    capabilities=[],
+                    tools=self.get_tool_declarations(),
+                )
 
-            # Send to Ghost Cursor Cloud
-            response = await self._call_hosted_api(hosted_request, user_id)
-        else:
-            continue_request = HostedRunRequest(
-                protocolVersion=req_model.protocolVersion,
-                runId=str(req_model.runId),
-                eventId=str(req_model.eventId),
-                revision=req_model.revision,
-                kind=req_model.kind,
-                results=[
-                    ToolCallResponse(
-                        id=r.id,
-                        ok=r.ok,
-                        output=r.output,
-                        error=r.error,
-                    )
-                    for r in req_model.results
-                ] if req_model.results else None,
-                answer=req_model.answer,
-                context=req_model.context.model_dump() if req_model.context is not None else {},
-            )
-            response = await self._call_hosted_api(continue_request, user_id)
+                # Send to Ghost Cursor Cloud
+                response = await self._call_hosted_api(hosted_request, user_id, client=client)
+            else:
+                continue_request = HostedRunRequest(
+                    protocolVersion=req_model.protocolVersion,
+                    runId=str(req_model.runId),
+                    eventId=str(req_model.eventId),
+                    revision=req_model.revision,
+                    kind=req_model.kind,
+                    results=[
+                        ToolCallResponse(
+                            id=r.id,
+                            ok=r.ok,
+                            output=r.output,
+                            error=r.error,
+                        )
+                        for r in req_model.results
+                    ] if req_model.results else None,
+                    answer=req_model.answer,
+                    context=req_model.context.model_dump() if req_model.context is not None else {},
+                )
+                response = await self._call_hosted_api(continue_request, user_id, client=client)
 
-        # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
-        rounds = 0
-        executed_tool_calls: List[Dict[str, str]] = []
-        while response.toolCalls and rounds < self.config.max_tool_rounds:
-            rounds += 1
-            for tc in response.toolCalls:
-                executed_tool_calls.append({"id": tc.id, "tool": tc.tool})
-            tool_results = await self._execute_local_tools(
-                response.runId,
-                response.revision,
-                response.toolCalls,
-                user_id,
-            )
+            # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
+            rounds = 0
+            executed_tool_calls: List[Dict[str, str]] = []
+            while response.toolCalls and rounds < self.config.max_tool_rounds:
+                rounds += 1
+                for tc in response.toolCalls:
+                    executed_tool_calls.append({"id": tc.id, "tool": tc.tool})
+                tool_results = await self._execute_local_tools(
+                    response.runId,
+                    response.revision,
+                    response.toolCalls,
+                    user_id,
+                )
 
-            # Continue run with tool results
-            continue_request = HostedRunRequest(
-                protocolVersion="1",
-                runId=response.runId,
-                eventId=str(uuid.uuid4()),
-                revision=response.revision,
-                kind="tools",
-                results=tool_results,
-            )
-            response = await self._call_hosted_api(continue_request, user_id)
+                # Continue run with tool results
+                continue_request = HostedRunRequest(
+                    protocolVersion="1",
+                    runId=response.runId,
+                    eventId=str(uuid.uuid4()),
+                    revision=response.revision,
+                    kind="tools",
+                    results=tool_results,
+                )
+                response = await self._call_hosted_api(continue_request, user_id, client=client)
 
-        if response.toolCalls or response.status == "awaiting_tools":
-            raise GatewayError(502, "tool_round_limit")
+            if response.toolCalls or response.status == "awaiting_tools":
+                raise GatewayError(502, "tool_round_limit")
 
-        # Return public projection (exclude toolCalls, brain, etc.)
-        public_resp = self._project_public_response(response)
+            # Return public projection (exclude toolCalls, brain, etc.)
+            public_resp = self._project_public_response(response)
 
-        # Run optional response filter
-        if self.config.filter_response:
-            try:
-                res = self.config.filter_response(public_resp, user_id)
-                if inspect.isawaitable(res):
-                    public_resp = await res
-                else:
-                    public_resp = res
-            except GatewayError:
-                raise
-            except Exception as e:
-                logger.warning(f"Filter response error: {e}")
+            # Run optional response filter
+            if self.config.filter_response:
+                try:
+                    res = self.config.filter_response(public_resp, user_id)
+                    if inspect.isawaitable(res):
+                        public_resp = await res
+                    else:
+                        public_resp = res
+                except GatewayError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"Filter response error: {e}")
+                    raise GatewayError(502, "bad_public_response")
+
+            if not isinstance(public_resp, dict):
                 raise GatewayError(502, "bad_public_response")
 
-        if not isinstance(public_resp, dict):
-            raise GatewayError(502, "bad_public_response")
+            try:
+                envelope = PublicEnvelope.model_validate(public_resp)
+                result = envelope.model_dump()
+            except ValidationError:
+                raise GatewayError(502, "bad_public_response")
 
+            if BRAIN_CANARY in json.dumps(result):
+                raise GatewayError(502, "disclosure_blocked")
+
+            if self.chat_store:
+                safe_response = response.model_copy(
+                    update={"reply": result["reply"], "actions": result["actions"]}
+                )
+                await self._persist_turn(payload, safe_response, user_id, executed_tool_calls=executed_tool_calls)
+
+            return result
+
+    def handle_turn_sync(
+        self,
+        payload: Dict[str, Any],
+        user_id: str,
+        current_page: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Synchronously execute a conversation turn using asyncio.run."""
         try:
-            envelope = PublicEnvelope.model_validate(public_resp)
-            result = envelope.model_dump()
-        except ValidationError:
-            raise GatewayError(502, "bad_public_response")
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
 
-        if BRAIN_CANARY in json.dumps(result):
-            raise GatewayError(502, "disclosure_blocked")
+        if loop and loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    self.handle_turn(payload=payload, user_id=user_id, current_page=current_page),
+                ).result()
 
-        if self.chat_store:
-            safe_response = response.model_copy(
-                update={"reply": result["reply"], "actions": result["actions"]}
-            )
-            await self._persist_turn(payload, safe_response, user_id, executed_tool_calls=executed_tool_calls)
-
-        return result
+        return asyncio.run(self.handle_turn(payload=payload, user_id=user_id, current_page=current_page))
 
     async def _call_hosted_api(
         self,
         request: HostedRunRequest,
         user_id: str,
+        client: Optional[httpx.AsyncClient] = None,
     ) -> HostedRunResponse:
         """Call Ghost Cursor Cloud API"""
-        client = await self._get_http_client()
+        if client is None:
+            raw_client = self._get_http_client()
+            client_inst = await raw_client if inspect.isawaitable(raw_client) else raw_client
+            async with client_inst:
+                return await self._call_hosted_api(request, user_id, client=client_inst)
 
         headers = {
             "Authorization": f"Bearer {self.config.api_key}",

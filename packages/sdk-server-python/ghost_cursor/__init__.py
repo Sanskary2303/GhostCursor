@@ -16,11 +16,6 @@ try:
 except ImportError:
     ghost_cursor_blueprint = None  # type: ignore
 
-try:
-    from .django import ghost_cursor_urls
-except ImportError:
-    ghost_cursor_urls = None  # type: ignore
-
 __version__ = "0.1.0"
 
 __all__ = [
@@ -38,5 +33,4 @@ __all__ = [
     "GhostCursorFastAPI",
     "ghost_cursor_router",
     "ghost_cursor_blueprint",
-    "ghost_cursor_urls",
 ]

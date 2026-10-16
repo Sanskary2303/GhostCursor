@@ -296,7 +296,7 @@ async def test_start_without_request_id_rejected():
 async def test_upstream_409_conflict():
     """Upstream 409 status code maps to GatewayError(409, 'conflict')"""
     backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
-    backend._http_client = httpx.AsyncClient(
+    backend._get_http_client = lambda: httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(409, json={}))
     )
     payload = {
@@ -390,7 +390,7 @@ async def test_canary_in_hosted_reply_raises_disclosure_blocked():
         })
 
     backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     payload = {
         "command": "start",
@@ -425,7 +425,7 @@ async def test_canary_in_hosted_reply_not_saved_to_chat_store():
     backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
     store = InMemoryChatStore()
     backend.attach_chat_store(store)
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     payload = {
         "command": "start",
@@ -466,7 +466,7 @@ async def test_filtered_reply_persists_filtered_content_to_chat_store():
     )
     store = InMemoryChatStore()
     backend.attach_chat_store(store)
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     payload = {
         "command": "start",
@@ -508,7 +508,7 @@ async def test_filter_adding_key_raises_bad_public_response():
         api_key="test-key-shophive-demo-0123456789abcdef",
         filter_response=invalid_filter,
     )
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     payload = {
         "command": "start",
@@ -546,7 +546,7 @@ async def test_filter_editing_reply_is_accepted():
         api_key="test-key-shophive-demo-0123456789abcdef",
         filter_response=clean_filter,
     )
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     payload = {
         "command": "start",
@@ -621,7 +621,7 @@ async def test_chat_persistence_start_and_continue_same_session():
                 "actions": None,
             })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     # 1. Start turn
     start_payload = {
@@ -705,7 +705,7 @@ async def test_second_start_creates_new_session_or_reuses_session_id():
             "actions": None,
         })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     # First start
     await backend.handle_turn({
@@ -836,7 +836,7 @@ async def test_assistant_tool_calls_recorded_without_outputs():
                 "actions": None,
             })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     payload = {
         "command": "start",
@@ -886,7 +886,7 @@ async def test_session_auto_summary_after_four_user_turns():
             "actions": None,
         })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     # Turn 1: start
     await backend.handle_turn({
@@ -979,7 +979,7 @@ async def test_upstream_too_large_streaming():
         }
         return httpx.Response(200, content=json.dumps(payload).encode())
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     with pytest.raises(GatewayError) as exc_info:
         await backend.handle_turn({
@@ -1001,7 +1001,7 @@ async def test_http_client_follow_redirects_false():
     client = await backend._get_http_client()
     assert client.follow_redirects is False
 
-    backend._http_client = httpx.AsyncClient(
+    backend._get_http_client = lambda: httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(302, headers={"Location": "/redirect"}))
     )
 
@@ -1059,7 +1059,7 @@ async def test_too_many_tool_calls_in_one_plan():
             "toolCalls": tool_calls,
         })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     await backend.handle_turn({
         "command": "start",
@@ -1143,7 +1143,7 @@ async def test_argument_validation_pydantic_and_dict():
             ],
         })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     await backend.handle_turn({
         "command": "start",
@@ -1210,7 +1210,7 @@ async def test_tool_context_idempotency_key():
             ],
         })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     await backend.handle_turn({
         "command": "start",
@@ -1273,7 +1273,7 @@ async def test_tool_timeout():
             ],
         })
 
-    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
     await backend.handle_turn({
         "command": "start",
@@ -1289,6 +1289,195 @@ async def test_tool_timeout():
     assert results[0]["id"] == "tc_slow"
     assert results[0]["ok"] is False
     assert results[0]["error"] == "tool timed out"
+
+
+def test_django_gateway_view():
+    """Django gateway_view requires POST, CSRF enabled, auth, size checks, and delegates via handle_turn_sync"""
+    import django
+    from django.conf import settings
+    if not settings.configured:
+        settings.configure(
+            SECRET_KEY="test-secret-key-django-ghost-cursor",
+            ALLOWED_HOSTS=["*"],
+            INSTALLED_APPS=[
+                "django.contrib.auth",
+                "django.contrib.contenttypes",
+            ],
+        )
+        django.setup()
+
+    from django.test import RequestFactory
+    from django.contrib.auth.models import AnonymousUser
+    from ghost_cursor_django import gateway_view
+
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+    view = gateway_view(backend)
+
+    # 1. Assert not csrf_exempt
+    assert not getattr(view, "csrf_exempt", False)
+
+    rf = RequestFactory()
+
+    # 2. 405 for GET
+    get_req = rf.get("/api/ghost-cursor")
+    get_req.user = AnonymousUser()
+    get_res = view(get_req)
+    assert get_res.status_code == 405
+
+    # 3. 401 when unauthenticated
+    post_unauth = rf.post("/api/ghost-cursor", data=json.dumps({"message": "hi"}), content_type="application/json")
+    post_unauth.user = AnonymousUser()
+    res_unauth = view(post_unauth)
+    assert res_unauth.status_code == 401
+    assert json.loads(res_unauth.content)["error"] == "unauthorized"
+    assert res_unauth.headers["Cache-Control"] == "no-store"
+
+    # Fake authenticated user
+    class MockUser:
+        is_authenticated = True
+        pk = "user_42"
+
+    auth_user = MockUser()
+
+    # 4. 413 when body > 64 KiB
+    huge_data = "a" * (65 * 1024)
+    post_huge = rf.post("/api/ghost-cursor", data=huge_data, content_type="application/json")
+    post_huge.user = auth_user
+    res_huge = view(post_huge)
+    assert res_huge.status_code == 413
+    assert json.loads(res_huge.content)["error"] == "payload_too_large"
+    assert res_huge.headers["Cache-Control"] == "no-store"
+
+    # 5. 400 for invalid JSON
+    post_bad_json = rf.post("/api/ghost-cursor", data="not json at all", content_type="application/json")
+    post_bad_json.user = auth_user
+    res_bad_json = view(post_bad_json)
+    assert res_bad_json.status_code == 400
+    assert json.loads(res_bad_json.content)["error"] == "invalid_json"
+
+    # 6. 200 on success with monkeypatched handle_turn_sync
+    recorded_call = {}
+    def mock_handle_turn_sync(payload, user_id, current_page=None):
+        recorded_call["payload"] = payload
+        recorded_call["user_id"] = user_id
+        recorded_call["current_page"] = current_page
+        return {
+            "protocolVersion": "1",
+            "runId": "run_test_123",
+            "revision": 0,
+            "status": "completed",
+            "reply": "All good from Django",
+            "questions": None,
+            "actions": None,
+        }
+
+    backend.handle_turn_sync = mock_handle_turn_sync
+    valid_payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Hello Django",
+        "context": {"page": "checkout"},
+    }
+    post_valid = rf.post("/api/ghost-cursor", data=json.dumps(valid_payload), content_type="application/json")
+    post_valid.user = auth_user
+    res_valid = view(post_valid)
+    assert res_valid.status_code == 200
+    assert res_valid.headers["Cache-Control"] == "no-store"
+    assert json.loads(res_valid.content)["reply"] == "All good from Django"
+    assert recorded_call["user_id"] == "user_42"
+    assert recorded_call["current_page"] == "checkout"
+
+
+def test_flask_blueprint():
+    """Flask ghost_cursor_blueprint exposes POST "", checks auth, checks Origin, requires JSON, and delegates"""
+    from flask import Flask
+    from ghost_cursor.flask import ghost_cursor_blueprint
+
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+
+    current_user_id = None
+    def get_user_id():
+        return current_user_id
+
+    app = Flask(__name__)
+    bp = ghost_cursor_blueprint(backend, get_user_id=get_user_id)
+    app.register_blueprint(bp, url_prefix="/api/ghost-cursor")
+    client = app.test_client()
+
+    valid_payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Hello Flask",
+        "context": {"page": "home"},
+    }
+
+    # 1. 401 if get_user_id returns nothing (current_user_id is None)
+    res_unauth = client.post("/api/ghost-cursor", json=valid_payload)
+    assert res_unauth.status_code == 401
+    assert res_unauth.get_json()["error"] == "unauthorized"
+    assert res_unauth.headers["Cache-Control"] == "no-store"
+
+    # Authenticate user
+    current_user_id = "user_flask_99"
+
+    # 2. 403 if Origin header is present and differs from request.host_url.rstrip("/")
+    res_bad_origin = client.post(
+        "/api/ghost-cursor",
+        json=valid_payload,
+        headers={"Origin": "https://malicious-site.com"},
+    )
+    assert res_bad_origin.status_code == 403
+    assert res_bad_origin.get_json()["error"] == "cross_origin_forbidden"
+    assert res_bad_origin.headers["Cache-Control"] == "no-store"
+
+    # 3. 415 if body isn't JSON
+    res_not_json = client.post(
+        "/api/ghost-cursor",
+        data="just text",
+        headers={"Content-Type": "text/plain"},
+    )
+    assert res_not_json.status_code == 415
+    assert res_not_json.get_json()["error"] == "unsupported_media_type"
+
+    # 4. 400 for invalid JSON
+    res_invalid_json = client.post(
+        "/api/ghost-cursor",
+        data="{malformed json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert res_invalid_json.status_code == 400
+    assert res_invalid_json.get_json()["error"] == "invalid_json"
+
+    # 5. 200 with handle_turn_sync monkeypatched
+    recorded_call = {}
+    def mock_handle_turn_sync(payload, user_id, current_page=None):
+        recorded_call["payload"] = payload
+        recorded_call["user_id"] = user_id
+        recorded_call["current_page"] = current_page
+        return {
+            "protocolVersion": "1",
+            "runId": "run_flask_456",
+            "revision": 0,
+            "status": "completed",
+            "reply": "All good from Flask",
+            "questions": None,
+            "actions": None,
+        }
+
+    backend.handle_turn_sync = mock_handle_turn_sync
+    res_ok = client.post(
+        "/api/ghost-cursor",
+        json=valid_payload,
+        headers={"Origin": "http://localhost"},
+    )
+    assert res_ok.status_code == 200
+    assert res_ok.headers["Cache-Control"] == "no-store"
+    assert res_ok.get_json()["reply"] == "All good from Flask"
+    assert recorded_call["user_id"] == "user_flask_99"
+    assert recorded_call["current_page"] == "home"
+
 
 
 

@@ -13,18 +13,20 @@ echo "=========================================================="
 
 VENV_PYTHON="$SCRIPT_DIR/.venv/bin/python"
 if [ ! -f "$VENV_PYTHON" ]; then
-    echo "❌ Virtualenv not found at .venv. Creating and installing..."
+    echo "❌ Virtualenv not found at .venv. Creating..."
     python3 -m venv .venv
-    .venv/bin/pip install -e packages/sdk-server-python
-    .venv/bin/pip install -r services/orchestrator/requirements.txt
-    .venv/bin/pip install -r demo/shophive/backend/requirements.txt
 fi
+
+.venv/bin/pip install -q -e packages/sdk-server-python
+.venv/bin/pip install -q -r services/orchestrator/requirements.txt
+.venv/bin/pip install -q -r demo/shophive/backend/requirements.txt
 
 if [ ! -d node_modules ]; then npm ci; fi
 
 # Build Frontend SDK
 echo "📦 Building Frontend SDK..."
 npm run build --workspace=packages/sdk-frontend
+npm run build --workspace=packages/sdk-react
 
 # Build ShopHive Frontend
 echo "📦 Building ShopHive Storefront Frontend..."

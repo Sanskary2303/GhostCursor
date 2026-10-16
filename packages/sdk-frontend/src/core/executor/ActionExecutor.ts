@@ -415,10 +415,8 @@ export class ActionExecutor {
    * Execute an array of actions sequentially
    */
   async execute(actions: Action[]): Promise<ExecutionResult> {
+    this.isStopped = false;
     this.abortController = new AbortController();
-    if (this.isStopped) {
-      this.abortController.abort();
-    }
     const results: ToolResult[] = [];
     const skipRest = (from: number, reason: string) => {
       for (const rest of actions.slice(from)) results.push({ id: rest.id ?? crypto.randomUUID(), ok: false, error: reason });

@@ -370,12 +370,12 @@ export class TourEngine {
     const messageEl = (tooltip.querySelector('.tour-message') as HTMLElement) || document.createElement('div');
     messageEl.className = 'tour-message';
     messageEl.style.marginBottom = '8px';
-    messageEl.innerHTML = `
-      <div style="font-size: 12px; color: #0052FF; font-weight: 600; margin-bottom: 4px;">
-        Step ${stepNumber} of ${totalSteps}
-      </div>
-      <div>${message}</div>
-    `;
+    const counter = document.createElement('div');
+    counter.style.cssText = 'font-size: 12px; color: #0052FF; font-weight: 600; margin-bottom: 4px;';
+    counter.textContent = `Step ${stepNumber} of ${totalSteps}`;
+    const body = document.createElement('div');
+    body.textContent = message;
+    messageEl.replaceChildren(counter, body);
 
     // Insert message before controls
     const controls = tooltip.querySelector('#ghost-tour-controls');

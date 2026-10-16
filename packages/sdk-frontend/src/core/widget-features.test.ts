@@ -156,22 +156,18 @@ describe('Widget Features and Hardening (Step 29)', () => {
   });
 
   describe('ActionExecutor stop()', () => {
-    it('marks remaining actions as cancelled by user when stopped', async () => {
+    it('resets stop flag on execute so next approved plan is not cancelled', async () => {
       const executor = new ActionExecutor({ timeout: 500 });
 
-      // Stop before execution
+      // Stop with nothing running
       executor.stop();
 
       const res = await executor.execute([
-        { id: 'step-1', type: 'navigate', target_page: 'products' },
-        { id: 'step-2', type: 'click', target_id: 'btn' },
+        { id: 'a1', type: 'click', target_id: 'bad id', explanation: 'x' },
       ]);
 
-      expect(res.success).toBe(false);
-      expect(res.error).toBe('cancelled');
-      expect(res.results).toHaveLength(2);
-      expect(res.results[0].error).toBe('cancelled by user');
-      expect(res.results[1].error).toBe('cancelled by user');
+      expect(res.results[0].error).not.toBe('cancelled by user');
+      expect(res.results[0].error).toBe('invalid target id');
     });
   });
 

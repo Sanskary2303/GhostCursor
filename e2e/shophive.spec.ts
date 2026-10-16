@@ -332,6 +332,44 @@ test('accessibility: role=log, aria-live=polite, focus on open, and escape to cl
   await expect(chat(page)).toBeVisible();
 });
 
+test('tour renders HTML as literal text and prevents XSS (S-13)', async ({ page }) => {
+  await page.goto('/orders');
+  const trackBtn = page.locator('[data-ghost-id$=".track"]').first();
+  await expect(trackBtn).toBeVisible({ timeout: 10_000 });
+  const targetId = await trackBtn.getAttribute('data-ghost-id');
+  expect(targetId).toBeTruthy();
+
+  void page.evaluate((tid) => {
+    const sdk = (window as any).__GHOST_CURSOR_SDK__;
+    new sdk.ActionExecutor().execute([
+      {
+        id: 'a1',
+        type: 'guided_tour',
+        steps: [
+          {
+            target_id: tid,
+            message: '<img src=x onerror="window.__xss=1">Track here',
+          },
+        ],
+      },
+    ]);
+  }, targetId);
+
+  const nextBtn = page.locator('#ghost-tour-next');
+  await expect(nextBtn).toBeVisible({ timeout: 10_000 });
+
+  const xssValue = await page.evaluate(() => (window as any).__xss);
+  expect(xssValue).toBeUndefined();
+
+  const tooltip = page.locator('#ghost-tour-tooltip');
+  await expect(tooltip).toContainText('<img src=x');
+
+  const skipBtn = page.locator('#ghost-tour-skip');
+  await expect(skipBtn).toBeVisible();
+  await skipBtn.click();
+  await expect(tooltip).not.toBeVisible();
+});
+
 
 
 

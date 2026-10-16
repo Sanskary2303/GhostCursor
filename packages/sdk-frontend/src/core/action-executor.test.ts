@@ -82,19 +82,25 @@ describe('ActionExecutor', () => {
   });
 
   it('skips later steps with "cancelled by user" when stopped', async () => {
+    const elA = document.createElement('button');
+    elA.setAttribute('data-ghost-id', 'target_a');
+    document.body.appendChild(elA);
+
     const actions: Action[] = [
       { id: 'act-a', type: 'click', target_id: 'target_a' },
       { id: 'act-b', type: 'click', target_id: 'target_b' },
     ];
 
-    const executor = new ActionExecutor({ timeout: 200 });
-    executor.stop();
-
+    const executor = new ActionExecutor({
+      timeout: 500,
+      onProgress: (_act, status) => {
+        if (status === 'executing') executor.stop();
+      },
+    });
     const result = await executor.execute(actions);
     expect(result.success).toBe(false);
     expect(result.results.length).toBe(2);
     expect(result.results[0].id).toBe('act-a');
-    expect(result.results[0].error).toBe('cancelled by user');
     expect(result.results[1].id).toBe('act-b');
     expect(result.results[1].error).toBe('cancelled by user');
   });

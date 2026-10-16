@@ -30,6 +30,7 @@ from pydantic import (
     StrictStr,
     ValidationError,
     field_validator,
+    model_validator,
 )
 
 from .storage import ChatStore
@@ -122,26 +123,25 @@ class GhostCursorConfig(BaseModel):
     tool_timeout: float = Field(default=10.0, description="Tool execution timeout in seconds")
     filter_response: Optional[Callable[[dict, str], Awaitable[dict]]] = None
 
-    @field_validator("service_url")
-    @classmethod
-    def validate_service_url(cls, v: str) -> str:
-        parsed = urlsplit(v)
+    insecure_http_hosts: List[str] = Field(
+        default_factory=lambda: [h.strip() for h in os.getenv("GHOST_CURSOR_INSECURE_HTTP_HOSTS", "").split(",") if h.strip()]
+    )
+
+    @model_validator(mode="after")
+    def validate_service_url(self) -> "GhostCursorConfig":
+        parsed = urlsplit(self.service_url)
         if parsed.scheme not in ("http", "https"):
             raise ValueError("service_url scheme must be https or http")
         if not parsed.hostname:
             raise ValueError("service_url must have a host")
-        is_local = (
-            parsed.hostname in ("localhost", "127.0.0.1", "::1")
-            or "." not in parsed.hostname
-            or parsed.hostname.endswith((".local", ".internal"))
-        )
-        if parsed.scheme == "http" and not is_local:
-            raise ValueError("http service_url is only allowed for localhost, 127.0.0.1, or internal hosts")
+        allowed_http = {"localhost", "127.0.0.1", "::1", *self.insecure_http_hosts}
+        if parsed.scheme == "http" and parsed.hostname not in allowed_http:
+            raise ValueError("http service_url is only allowed for localhost or hosts listed in insecure_http_hosts")
         if parsed.username or parsed.password:
             raise ValueError("service_url must not contain username or password")
         if parsed.query or parsed.fragment:
             raise ValueError("service_url must not contain query or fragment")
-        return v
+        return self
 
 
 class ToolCallRequest(BaseModel):

@@ -9,6 +9,7 @@ describe("Gateway URL Validation", () => {
   it("accepts valid https URLs", () => {
     expect(validateServiceUrl("https://api.ghostcursor.ai")).toBe("https://api.ghostcursor.ai");
     expect(validateServiceUrl("https://api.ghostcursor.ai/")).toBe("https://api.ghostcursor.ai");
+    expect(validateServiceUrl("https://anything.example")).toBe("https://anything.example");
   });
 
   it("accepts localhost http URLs", () => {
@@ -17,9 +18,15 @@ describe("Gateway URL Validation", () => {
     expect(validateServiceUrl("http://[::1]:8080")).toBe("http://[::1]:8080");
   });
 
-  it("rejects non-localhost http URLs", () => {
+  it("rejects non-localhost http URLs by default and enforces insecureHttpHosts", () => {
     expect(() => validateServiceUrl("http://api.ghostcursor.ai")).toThrow(/http is only allowed for localhost/);
     expect(() => validateServiceUrl("http://192.168.1.1:8080")).toThrow(/http is only allowed for localhost/);
+    expect(() => validateServiceUrl("http://api:8080")).toThrow(/http is only allowed for localhost/);
+    expect(() => validateServiceUrl("http://[2001:db8::1]:8080")).toThrow(/http is only allowed for localhost/);
+    expect(() => validateServiceUrl("http://evil-host:8080")).toThrow(/http is only allowed for localhost/);
+    expect(() => validateServiceUrl("http://metadata.google.internal")).toThrow(/http is only allowed for localhost/);
+
+    expect(validateServiceUrl("http://api:8080", ["api"])).toBe("http://api:8080");
   });
 
   it("rejects credentials, queries, and fragments", () => {

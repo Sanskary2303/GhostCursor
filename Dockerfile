@@ -66,7 +66,8 @@ COPY demo/shophive/frontend/ demo/shophive/frontend/
 RUN npm ci
 RUN npm run build --workspace=packages/sdk-frontend
 RUN npm run build --workspace=packages/sdk-react
-ENV VITE_E2E_HOOKS=1
+ARG VITE_E2E_HOOKS=0
+ENV VITE_E2E_HOOKS=${VITE_E2E_HOOKS}
 RUN npm run build --workspace=demo/shophive/frontend
 
 # ============================================================================

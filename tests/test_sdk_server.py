@@ -935,6 +935,7 @@ def test_service_url_validation():
         "http://[::1]:8080",
         "https://cloud.ghostcursor.ai",
         "https://cloud.ghostcursor.ai/v1/runs",
+        "https://anything.example",
     ]
     for url in valid_urls:
         cfg = GhostCursorConfig(
@@ -946,6 +947,10 @@ def test_service_url_validation():
     invalid_urls = [
         "http://cloud.ghostcursor.ai",                     # http on non-localhost
         "http://192.168.1.1:8080",                         # http on non-loopback IP
+        "http://api:8080",                                 # rejected by default
+        "http://[2001:db8::1]:8080",                       # IPv6 non-loopback rejected
+        "http://evil-host:8080",                           # non-loopback single-label rejected
+        "http://metadata.google.internal",                 # internal metadata rejected
         "https://user:pass@cloud.ghostcursor.ai",           # user/pass
         "https://cloud.ghostcursor.ai?token=secret",        # query
         "https://cloud.ghostcursor.ai#section",             # fragment
@@ -958,6 +963,14 @@ def test_service_url_validation():
                 api_key="test-key-shophive-demo-0123456789abcdef",
                 service_url=url,
             )
+
+    # http://api:8080 accepted with insecure_http_hosts=["api"]
+    cfg_insecure = GhostCursorConfig(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        service_url="http://api:8080",
+        insecure_http_hosts=["api"],
+    )
+    assert cfg_insecure.service_url == "http://api:8080"
 
 
 @pytest.mark.asyncio

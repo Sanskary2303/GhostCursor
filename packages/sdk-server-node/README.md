@@ -48,5 +48,6 @@ app.post("/api/ghost-cursor", express.json({ limit: "64kb" }), requireAuth, chec
 - `fetch` (`typeof globalThis.fetch`, optional): Custom fetch implementation.
 - `requestTimeoutMs` (`number`, optional, default `210000`): Upstream HTTP request timeout in milliseconds.
 - `toolTimeoutMs` (`number`, optional, default `10000`): Tool execution timeout in milliseconds.
+- `insecureHttpHosts` (`string[]`, optional): List of hostnames allowed for unencrypted HTTP connections (e.g. `['api']` in container networks).
 
 

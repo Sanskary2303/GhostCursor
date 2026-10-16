@@ -56,6 +56,7 @@ export interface GatewayOptions {
   fetch?: typeof globalThis.fetch;
   requestTimeoutMs?: number;
   toolTimeoutMs?: number;
+  insecureHttpHosts?: string[];
 }
 
 interface HostedToolCall {
@@ -75,7 +76,7 @@ interface HostedRunResponse {
   toolCalls?: HostedToolCall[];
 }
 
-export function validateServiceUrl(rawUrl: string): string {
+export function validateServiceUrl(rawUrl: string, insecureHttpHosts: string[] = []): string {
   let parsed: URL;
   try {
     parsed = new URL(rawUrl);
@@ -88,13 +89,11 @@ export function validateServiceUrl(rawUrl: string): string {
     hostname === "localhost" ||
     hostname === "127.0.0.1" ||
     hostname === "::1" ||
-    !hostname.includes(".") ||
-    hostname.endsWith(".local") ||
-    hostname.endsWith(".internal");
+    insecureHttpHosts.includes(hostname);
 
   if (parsed.protocol === "http:") {
     if (!isLocal) {
-      throw new Error(`Invalid serviceUrl: http is only allowed for localhost or internal hosts, got "${parsed.hostname}"`);
+      throw new Error(`Invalid serviceUrl: http is only allowed for localhost or hosts listed in insecureHttpHosts, got "${parsed.hostname}"`);
     }
   } else if (parsed.protocol !== "https:") {
     throw new Error(`Invalid serviceUrl: scheme must be https or http (localhost), got "${parsed.protocol}"`);
@@ -190,7 +189,7 @@ export class Gateway {
     if (!options.serviceUrl) throw new Error("serviceUrl is required");
     if (!options.serviceKey) throw new Error("serviceKey is required");
 
-    this.serviceUrl = validateServiceUrl(options.serviceUrl);
+    this.serviceUrl = validateServiceUrl(options.serviceUrl, options.insecureHttpHosts);
     this.serviceKey = options.serviceKey;
     this.loadBrain = options.loadBrain;
     this.capabilities = options.capabilities;

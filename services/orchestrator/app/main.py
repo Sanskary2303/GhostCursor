@@ -247,7 +247,7 @@ async def verify_tenant_credentials(
 
     matched_tenant = None
     for k, t in TENANT_KEYS.items():
-        if hmac.compare_digest(k, api_key):
+        if hmac.compare_digest(k.encode(), api_key.encode()):
             matched_tenant = t
 
     if not matched_tenant:

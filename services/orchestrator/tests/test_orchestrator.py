@@ -74,6 +74,14 @@ async def test_authentication_validation():
         )
         assert res.status_code == 401
 
+        # Non-ASCII character in Bearer token returns 401 instead of 500
+        res = await client.post(
+            "/v1/runs",
+            json={"protocolVersion": "1", "requestId": str(uuid.uuid4()), "message": "Hi"},
+            headers={"Authorization": "Bearer \u00e9".encode("latin-1"), "X-Ghost-Subject": "usr"},
+        )
+        assert res.status_code == 401
+
 
 @pytest.mark.asyncio
 async def test_create_run_awaiting_actions(auth_headers):
@@ -1128,8 +1136,16 @@ def test_validate_actions_strict_rules():
         validate_actions([{"type": "click", "target_id": "btn", "extra_key": "bad"}])
 
     # Unsafe navigation rejected
-    with pytest.raises(ValueError, match="cannot contain '://'"):
+    with pytest.raises(ValueError, match="must be an in-app page, not a URL"):
         validate_actions([{"type": "navigate", "target_page": "https://evil.com"}])
+
+    for scheme_url in ["javascript:alert(1)", "JavaScript:alert(1)", "data:text/html,x", "mailto:a@b.c"]:
+        with pytest.raises(ValueError, match="must be an in-app page, not a URL"):
+            validate_actions([{"type": "navigate", "target_page": scheme_url}])
+
+    # Accepts valid in-app pages
+    assert len(validate_actions([{"type": "navigate", "target_page": "settings"}])) == 1
+    assert len(validate_actions([{"type": "navigate", "target_page": "product/air-max-90"}])) == 1
 
     # Missing required field
     with pytest.raises(ValueError, match="missing 'target_id'"):

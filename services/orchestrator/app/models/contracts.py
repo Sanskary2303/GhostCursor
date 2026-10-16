@@ -329,8 +329,9 @@ def validate_actions(actions: Any) -> List[Dict[str, Any]]:
                 raise ValueError("navigate target_page must be a non-empty string")
             if len(target_page) > 200:
                 raise ValueError("navigate target_page must be <= 200 characters")
-            if "://" in target_page or target_page.startswith("//"):
-                raise ValueError("navigate target_page cannot contain '://' or start with '//'")
+            if ("://" in target_page or target_page.startswith("//")
+                    or re.match(r"^[a-z][a-z0-9+.-]*:", target_page, re.IGNORECASE)):
+                raise ValueError("navigate target_page must be an in-app page, not a URL")
 
         elif action_type == "click":
             allowed_keys.add("target_id")

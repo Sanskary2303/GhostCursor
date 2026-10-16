@@ -52,3 +52,42 @@ def test_invalid_protocol_fixtures_fail_python_validation(filepath):
     with pytest.raises((ValidationError, GatewayError)):
         validate_fixture(data)
 
+
+import jsonschema
+
+SCHEMAS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "packages", "sdk-server-python", "ghost_cursor", "schemas"))
+
+with open(os.path.join(SCHEMAS_DIR, "BrowserStartRequest.json"), "r", encoding="utf-8") as f:
+    start_schema_validator = jsonschema.Draft7Validator(json.load(f))
+
+with open(os.path.join(SCHEMAS_DIR, "BrowserContinueRequest.json"), "r", encoding="utf-8") as f:
+    continue_schema_validator = jsonschema.Draft7Validator(json.load(f))
+
+
+def validate_fixture_with_json_schema(data: dict) -> bool:
+    if not isinstance(data, dict):
+        return False
+    command = data.get("command")
+    if command == "start":
+        return start_schema_validator.is_valid(data)
+    elif command == "continue":
+        return continue_schema_validator.is_valid(data)
+    else:
+        # Unknown command is invalid
+        return False
+
+
+@pytest.mark.parametrize("filepath", VALID_FILES)
+def test_valid_protocol_fixtures_pass_json_schema(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert validate_fixture_with_json_schema(data) is True
+
+
+@pytest.mark.parametrize("filepath", INVALID_FILES)
+def test_invalid_protocol_fixtures_fail_json_schema(filepath):
+    with open(filepath, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    assert validate_fixture_with_json_schema(data) is False
+
+

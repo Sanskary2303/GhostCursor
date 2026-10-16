@@ -19,7 +19,8 @@
           "$ref": "#/definitions/EventId"
         },
         "revision": {
-          "type": "number"
+          "type": "integer",
+          "minimum": 0
         },
         "kind": {
           "type": "string",
@@ -33,10 +34,13 @@
           "type": "array",
           "items": {
             "$ref": "#/definitions/ToolResult"
-          }
+          },
+          "maxItems": 12
         },
         "answer": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
         },
         "context": {
           "$ref": "#/definitions/Partial%3CPageContext%3E"
@@ -58,10 +62,12 @@
       "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
     },
     "RunId": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
     },
     "EventId": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
     },
     "ToolResult": {
       "type": "object",

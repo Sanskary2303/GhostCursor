@@ -5,10 +5,12 @@
 
 // Primitive constraints
 export type ProtocolVersion = '1';
-export type LogicalId = string; // 1-120 chars, ^[a-zA-Z0-9_.:-]+$
-export type RunId = string; // UUID
-export type RequestId = string; // UUID
-export type EventId = string; // UUID
+/** @pattern ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+export type RunId = string;
+/** @pattern ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+export type RequestId = string;
+/** @pattern ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
+export type EventId = string;
 export type SubjectId = string; // 1-120 chars, ^[a-zA-Z0-9_.:@-]+$
 export type TenantId = string;
 
@@ -72,8 +74,13 @@ export interface BrowserStartRequest {
   command: 'start';
   protocolVersion: ProtocolVersion;
   requestId: RequestId;
+  sessionId?: RequestId;
+  /**
+   * @minLength 1
+   * @maxLength 6000
+   */
   message: string;
-  context: PageContext;
+  context?: Partial<PageContext>;
 }
 
 export interface BrowserContinueRequest {
@@ -81,9 +88,20 @@ export interface BrowserContinueRequest {
   protocolVersion: ProtocolVersion;
   runId: RunId;
   eventId: EventId;
+  /**
+   * @asType integer
+   * @minimum 0
+   */
   revision: number;
   kind: 'actions' | 'answer' | 'cancel';
+  /**
+   * @maxItems 12
+   */
   results?: ToolResult[];
+  /**
+   * @minLength 1
+   * @maxLength 6000
+   */
   answer?: string;
   context?: Partial<PageContext>;
 }
@@ -92,11 +110,12 @@ export interface BrowserRequest {
   command: 'start' | 'continue';
   protocolVersion: ProtocolVersion;
   requestId?: RequestId;
+  sessionId?: RequestId;
   runId?: RunId;
   eventId?: EventId;
   revision?: number;
   message?: string;
-  context?: PageContext;
+  context?: Partial<PageContext>;
   kind?: 'actions' | 'answer' | 'cancel';
   results?: ToolResult[];
   answer?: string;

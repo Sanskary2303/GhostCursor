@@ -48,7 +48,8 @@
       "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
     },
     "RunId": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
     },
     "RunStatus": {
       "type": "string",

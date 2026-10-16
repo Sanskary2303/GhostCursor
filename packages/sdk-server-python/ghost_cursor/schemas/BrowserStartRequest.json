@@ -15,19 +15,23 @@
         "requestId": {
           "$ref": "#/definitions/RequestId"
         },
+        "sessionId": {
+          "$ref": "#/definitions/RequestId"
+        },
         "message": {
-          "type": "string"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 6000
         },
         "context": {
-          "$ref": "#/definitions/PageContext"
+          "$ref": "#/definitions/Partial%3CPageContext%3E"
         }
       },
       "required": [
         "command",
         "protocolVersion",
         "requestId",
-        "message",
-        "context"
+        "message"
       ],
       "additionalProperties": false
     },
@@ -37,9 +41,10 @@
       "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
     },
     "RequestId": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
     },
-    "PageContext": {
+    "Partial<PageContext>": {
       "type": "object",
       "properties": {
         "page": {
@@ -55,11 +60,6 @@
           }
         }
       },
-      "required": [
-        "page",
-        "values",
-        "availableTargets"
-      ],
       "additionalProperties": false
     },
     "Record<string,(string|number|boolean)>": {

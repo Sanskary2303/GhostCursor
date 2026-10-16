@@ -7,11 +7,14 @@ Google ADK Agent Engine with Vertex AI Gemini 2.0 integration.
 from __future__ import annotations
 
 import copy
-import os
-import uuid
+import hmac
+import json
 import logging
+import os
+import re
+import uuid
 from contextlib import asynccontextmanager
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +47,29 @@ from .tools.loopback import GatewayLoopbackHandler
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+TENANT_ID_PATTERN = re.compile(r"^[a-z0-9_]{1,64}$")
+
+
+def load_tenant_keys() -> Dict[str, str]:
+    raw = os.getenv("GHOST_TENANT_KEYS")
+    if not raw:
+        raise RuntimeError("GHOST_TENANT_KEYS is required")
+    try:
+        data = json.loads(raw)
+    except Exception as e:
+        raise RuntimeError(f"Invalid JSON in GHOST_TENANT_KEYS: {e}")
+    if not isinstance(data, dict) or not data:
+        raise RuntimeError("GHOST_TENANT_KEYS must be a non-empty object")
+    for key, tenant in data.items():
+        if not isinstance(key, str) or len(key) < 32:
+            raise RuntimeError(f"Tenant API key must be at least 32 characters: {key[:8] if isinstance(key, str) else type(key)}...")
+        if not isinstance(tenant, str) or not TENANT_ID_PATTERN.match(tenant):
+            raise RuntimeError(f"Invalid tenant ID: {tenant!r}. Tenant must match ^[a-z0-9_]{{1,64}}$")
+    return data
+
+
+TENANT_KEYS: Dict[str, str] = load_tenant_keys()
+
 # Global instances
 run_store: Optional[RunStore] = None
 vertex_client: Optional[VertexAIClient] = None
@@ -53,24 +79,40 @@ loopback_handler: Optional[GatewayLoopbackHandler] = None
 def init_globals():
     """Ensure global services are initialized even if lifespan wasn't triggered (e.g. tests)"""
     global run_store, vertex_client, loopback_handler
+    ghost_env = os.getenv("GHOST_ENV", "development").lower()
+    ghost_provider = os.getenv("GHOST_PROVIDER")
+    ghost_store = os.getenv("GHOST_STORE")
+
+    if not ghost_provider or ghost_provider not in ("mock", "vertex"):
+        raise RuntimeError(f"GHOST_PROVIDER must be 'mock' or 'vertex', got: {ghost_provider!r}")
+    if not ghost_store or ghost_store not in ("memory", "postgres"):
+        raise RuntimeError(f"GHOST_STORE must be 'memory' or 'postgres', got: {ghost_store!r}")
+
+    if ghost_env == "production":
+        if ghost_provider == "mock":
+            raise RuntimeError("mock provider is not allowed in production")
+        if ghost_store == "memory":
+            raise RuntimeError("memory store is not allowed in production")
+
+    if ghost_store == "postgres" and not os.getenv("DATABASE_URL"):
+        raise RuntimeError("DATABASE_URL is required when GHOST_STORE is 'postgres'")
+
+    if ghost_provider == "vertex" and not os.getenv("GCP_PROJECT_ID"):
+        raise RuntimeError("GCP_PROJECT_ID is required when GHOST_PROVIDER is 'vertex'")
+
     if run_store is None:
-        database_url = os.getenv("DATABASE_URL")
-        if database_url:
-            run_store = PostgreSQLRunStore(database_url)
+        if ghost_store == "postgres":
+            run_store = PostgreSQLRunStore(os.environ["DATABASE_URL"])
         else:
             run_store = InMemoryRunStore()
 
     if vertex_client is None:
-        use_mock = os.getenv("USE_MOCK_LLM", "true").lower() == "true"
-        if use_mock:
-            vertex_client = MockVertexAIClient()
-        else:
-            project_id = os.getenv("GCP_PROJECT_ID")
+        if ghost_provider == "vertex":
+            project_id = os.environ["GCP_PROJECT_ID"]
             location = os.getenv("GCP_LOCATION", "us-central1")
-            if project_id:
-                vertex_client = VertexAIClient(project_id=project_id, location=location)
-            else:
-                vertex_client = MockVertexAIClient()
+            vertex_client = VertexAIClient(project_id=project_id, location=location)
+        else:
+            vertex_client = MockVertexAIClient()
 
     if loopback_handler is None:
         loopback_handler = GatewayLoopbackHandler()
@@ -131,29 +173,22 @@ async def verify_tenant_credentials(
 
     api_key = authorization[7:]  # Remove "Bearer "
 
-    # In production, validate against Secret Manager / database
-    # For now, use a simple mapping
-    valid_keys = {
-        os.getenv("TENANT_API_KEY_1", "test-key-1"): "tenant_1",
-        os.getenv("TENANT_API_KEY_2", "test-key-2"): "tenant_2",
-        os.getenv("GHOST_CURSOR_API_KEY", "test-key-shophive-demo"): "shophive_demo",
-        "test-key-shophive-demo": "shophive_demo",
-    }
+    matched_tenant = None
+    for k, t in TENANT_KEYS.items():
+        if hmac.compare_digest(k, api_key):
+            matched_tenant = t
 
-    tenant_id = valid_keys.get(api_key)
-    if not tenant_id:
+    if not matched_tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
     # Validate subject format
     if not x_ghost_subject or not (1 <= len(x_ghost_subject) <= 120):
         raise HTTPException(status_code=400, detail="Invalid X-Ghost-Subject")
 
-    # Basic format validation
-    import re
     if not re.match(r'^[a-zA-Z0-9_.:@-]+$', x_ghost_subject):
         raise HTTPException(status_code=400, detail="Invalid subject format")
 
-    return tenant_id, x_ghost_subject
+    return matched_tenant, x_ghost_subject
 
 
 def reject_origin_requests(request: Request):

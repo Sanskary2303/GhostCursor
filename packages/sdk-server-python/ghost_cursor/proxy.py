@@ -90,7 +90,7 @@ class GhostCursorConfig(BaseModel):
     """Configuration for Ghost Cursor Backend"""
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    api_key: str = Field(default="test-key-shophive-demo-super-secret-key-32chars", min_length=1, description="Server-to-server API key")
+    api_key: str = Field(..., min_length=32, description="Server-to-server API key")
     tenant_id: str = Field(default="shophive_demo", min_length=1, max_length=64, description="Tenant identifier")
     brain_dir: str = Field(default="./brain", description="Path to brain markdown files")
     service_url: str = Field(default="http://localhost:8080", description="Ghost Cursor Cloud URL")

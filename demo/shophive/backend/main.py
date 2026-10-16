@@ -36,7 +36,7 @@ from tools.ghost_tools import register_shophive_tools
 # Configuration
 # ============================================================================
 
-GHOST_CURSOR_API_KEY = os.getenv("GHOST_CURSOR_API_KEY", "test-key-shophive-demo")
+GHOST_CURSOR_API_KEY = os.environ["GHOST_CURSOR_API_KEY"]
 GHOST_CURSOR_TENANT_ID = os.getenv("GHOST_CURSOR_TENANT_ID", "shophive_demo")
 GHOST_CURSOR_BRAIN_DIR = os.getenv("GHOST_CURSOR_BRAIN_DIR", str(backend_dir / "brain"))
 GHOST_CURSOR_SERVICE_URL = os.getenv("GHOST_CURSOR_SERVICE_URL", "http://localhost:8080")

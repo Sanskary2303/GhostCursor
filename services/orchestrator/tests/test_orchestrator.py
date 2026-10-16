@@ -13,7 +13,7 @@ from services.orchestrator.app.main import app
 @pytest.fixture
 def auth_headers():
     return {
-        "Authorization": "Bearer test-key-shophive-demo",
+        "Authorization": "Bearer test-key-shophive-demo-0123456789abcdef",
         "X-Ghost-Subject": "user_demo_123",
         "Content-Type": "application/json",
     }
@@ -675,6 +675,127 @@ async def test_turn_limit_enforcement(auth_headers):
         )
         assert res_cancel.status_code == 200
         assert res_cancel.json()["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_old_test_key_returns_401():
+    """Verify legacy hardcoded test-key-shophive-demo returns 401"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post(
+            "/v1/runs",
+            json={
+                "command": "start",
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "test",
+                "brain": "",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers={
+                "Authorization": "Bearer test-key-shophive-demo",
+                "X-Ghost-Subject": "user_demo_123",
+                "Content-Type": "application/json",
+            },
+        )
+        assert res.status_code == 401
+        assert res.json()["error"] == "Invalid API key"
+
+
+def test_missing_tenant_keys_fails(monkeypatch):
+    """Missing GHOST_TENANT_KEYS raises RuntimeError"""
+    from services.orchestrator.app.main import load_tenant_keys
+    monkeypatch.delenv("GHOST_TENANT_KEYS", raising=False)
+    with pytest.raises(RuntimeError, match="GHOST_TENANT_KEYS is required"):
+        load_tenant_keys()
+
+
+def test_short_tenant_key_fails(monkeypatch):
+    """Tenant API key under 32 characters raises RuntimeError"""
+    from services.orchestrator.app.main import load_tenant_keys
+    monkeypatch.setenv("GHOST_TENANT_KEYS", '{"short-key": "shophive_demo"}')
+    with pytest.raises(RuntimeError, match="at least 32 characters"):
+        load_tenant_keys()
+
+
+def test_invalid_tenant_id_fails(monkeypatch):
+    """Tenant ID not matching ^[a-z0-9_]{1,64}$ raises RuntimeError"""
+    from services.orchestrator.app.main import load_tenant_keys
+    monkeypatch.setenv("GHOST_TENANT_KEYS", '{"test-key-shophive-demo-0123456789abcdef": "Invalid Tenant!"}')
+    with pytest.raises(RuntimeError, match="Invalid tenant ID"):
+        load_tenant_keys()
+
+
+def test_invalid_provider_fails(monkeypatch):
+    """Invalid GHOST_PROVIDER raises RuntimeError"""
+    from services.orchestrator.app.main import init_globals
+    monkeypatch.setenv("GHOST_PROVIDER", "invalid_provider")
+    with pytest.raises(RuntimeError, match="GHOST_PROVIDER must be 'mock' or 'vertex'"):
+        init_globals()
+
+
+def test_invalid_store_fails(monkeypatch):
+    """Invalid GHOST_STORE raises RuntimeError"""
+    from services.orchestrator.app.main import init_globals
+    monkeypatch.setenv("GHOST_PROVIDER", "mock")
+    monkeypatch.setenv("GHOST_STORE", "invalid_store")
+    with pytest.raises(RuntimeError, match="GHOST_STORE must be 'memory' or 'postgres'"):
+        init_globals()
+
+
+def test_production_refuses_mock_and_memory(monkeypatch):
+    """In production, mock provider and memory store raise RuntimeError"""
+    from services.orchestrator.app.main import init_globals
+    monkeypatch.setenv("GHOST_ENV", "production")
+    monkeypatch.setenv("GHOST_PROVIDER", "mock")
+    monkeypatch.setenv("GHOST_STORE", "postgres")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost/db")
+    with pytest.raises(RuntimeError, match="mock provider is not allowed in production"):
+        init_globals()
+
+    monkeypatch.setenv("GHOST_PROVIDER", "vertex")
+    monkeypatch.setenv("GCP_PROJECT_ID", "test-project")
+    monkeypatch.setenv("GHOST_STORE", "memory")
+    with pytest.raises(RuntimeError, match="memory store is not allowed in production"):
+        init_globals()
+
+
+def test_vertex_requires_gcp_project_id(monkeypatch):
+    """GHOST_PROVIDER=vertex requires GCP_PROJECT_ID"""
+    from services.orchestrator.app.main import init_globals
+    monkeypatch.setenv("GHOST_ENV", "development")
+    monkeypatch.setenv("GHOST_PROVIDER", "vertex")
+    monkeypatch.setenv("GHOST_STORE", "memory")
+    monkeypatch.delenv("GCP_PROJECT_ID", raising=False)
+    with pytest.raises(RuntimeError, match="GCP_PROJECT_ID is required"):
+        init_globals()
+
+
+def test_postgres_requires_database_url(monkeypatch):
+    """GHOST_STORE=postgres requires DATABASE_URL"""
+    from services.orchestrator.app.main import init_globals
+    monkeypatch.setenv("GHOST_ENV", "development")
+    monkeypatch.setenv("GHOST_PROVIDER", "mock")
+    monkeypatch.setenv("GHOST_STORE", "postgres")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with pytest.raises(RuntimeError, match="DATABASE_URL is required"):
+        init_globals()
+
+
+def test_orchestrator_startup_without_env_fails():
+    """Importing orchestrator main without GHOST_TENANT_KEYS fails startup"""
+    import subprocess
+    import sys
+    env = {k: v for k, v in os.environ.items() if k not in ("GHOST_TENANT_KEYS", "GHOST_PROVIDER", "GHOST_STORE")}
+    res = subprocess.run(
+        [sys.executable, "-c", "import services.orchestrator.app.main"],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert res.returncode != 0
+    assert "GHOST_TENANT_KEYS is required" in res.stderr
+
 
 
 

@@ -34,8 +34,10 @@ for port in 8080 8081; do
   if (exec 3<>/dev/tcp/127.0.0.1/$port) 2>/dev/null; then echo "Port $port is in use; stop that process first."; exit 1; fi
 done
 
-export USE_MOCK_LLM="${USE_MOCK_LLM:-true}"
-export GHOST_CURSOR_API_KEY="${GHOST_CURSOR_API_KEY:-test-key-shophive-demo}"
+KEY="$("$VENV_PYTHON" -c 'import secrets; print(secrets.token_hex(32))')"
+export GHOST_CURSOR_API_KEY="$KEY"
+export GHOST_TENANT_KEYS="{\"$KEY\": \"shophive_demo\"}"
+export GHOST_PROVIDER=mock GHOST_STORE=memory
 export GHOST_CURSOR_SERVICE_URL="${GHOST_CURSOR_SERVICE_URL:-http://127.0.0.1:8080}"
 export PYTHONPATH="$SCRIPT_DIR:$SCRIPT_DIR/packages/sdk-server-python:$SCRIPT_DIR/demo/shophive/backend"
 

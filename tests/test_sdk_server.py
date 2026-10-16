@@ -242,7 +242,7 @@ async def test_tool_registry():
 @pytest.mark.asyncio
 async def test_kind_tools_rejected():
     """Browser sending kind: 'tools' is rejected with 400 invalid_request"""
-    backend = GhostCursorBackend()
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
     payload = {
         "command": "continue",
         "protocolVersion": "1",
@@ -261,7 +261,7 @@ async def test_kind_tools_rejected():
 @pytest.mark.asyncio
 async def test_extra_brain_field_rejected():
     """Browser sending extra fields like brain is rejected with 400 invalid_request"""
-    backend = GhostCursorBackend()
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
     payload = {
         "command": "start",
         "protocolVersion": "1",
@@ -279,7 +279,7 @@ async def test_extra_brain_field_rejected():
 @pytest.mark.asyncio
 async def test_start_without_request_id_rejected():
     """Start command without requestId is rejected with 400 invalid_request"""
-    backend = GhostCursorBackend()
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
     payload = {
         "command": "start",
         "protocolVersion": "1",
@@ -295,7 +295,7 @@ async def test_start_without_request_id_rejected():
 @pytest.mark.asyncio
 async def test_upstream_409_conflict():
     """Upstream 409 status code maps to GatewayError(409, 'conflict')"""
-    backend = GhostCursorBackend()
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
     backend._http_client = httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(409, json={}))
     )
@@ -319,7 +319,7 @@ async def test_fastapi_router_gateway_error_mapping():
     from httpx import AsyncClient, ASGITransport
     from ghost_cursor.fastapi import create_ghost_cursor_router
 
-    backend = GhostCursorBackend()
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
     app = FastAPI()
     router = create_ghost_cursor_router(
         backend=backend,
@@ -354,4 +354,22 @@ async def test_fastapi_router_gateway_error_mapping():
         assert res.status_code == 400
         assert res.json() == {"error": "invalid_request"}
         assert res.headers.get("Cache-Control") == "no-store"
+
+
+def test_ghost_cursor_config_api_key_required_and_min_length():
+    """Test GhostCursorConfig requires api_key and rejects keys < 32 chars"""
+    from pydantic import ValidationError
+
+    # Missing api_key
+    with pytest.raises(ValidationError):
+        GhostCursorConfig()
+
+    # Short api_key (< 32 chars)
+    with pytest.raises(ValidationError):
+        GhostCursorConfig(api_key="too-short")
+
+    # Valid api_key (>= 32 chars)
+    config = GhostCursorConfig(api_key="a" * 32)
+    assert config.api_key == "a" * 32
+
 

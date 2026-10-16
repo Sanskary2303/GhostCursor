@@ -10,8 +10,8 @@ import { OrderTracking } from './pages/OrderTracking';
 import { Settings } from './pages/Settings';
 
 // [GHOST-CURSOR INTEGRATION - STEP 1: IMPORT SDK COMPONENT]
+import { GhostCursor } from '@ghost-cursor/sdk-react';
 import {
-  GhostCursor,
   ActionExecutor,
   registerTarget,
   getRegisteredTarget,

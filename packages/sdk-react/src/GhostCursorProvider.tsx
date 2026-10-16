@@ -1,8 +1,7 @@
 "use client";
-/** @jsxImportSource react */
 
 import React, { createContext, useContext, ReactNode } from 'react';
-import type { GhostCursorProps } from './types';
+import type { GhostCursorProps } from './types.js';
 
 export interface GhostCursorContextType extends GhostCursorProps {
   isInitialized: boolean;

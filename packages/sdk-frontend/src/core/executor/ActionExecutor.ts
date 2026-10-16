@@ -6,6 +6,7 @@
 import type { Action, ToolResult } from '../types';
 import { setNativeValue, setNativeSelectValue, setNativeCheckboxState, verifyValueRetained } from '../native-setter';
 import { resolveTargetWithCascade, reResolveElement, ResolutionOptions, getRegisteredTarget } from '../dom-utils';
+import { TourEngine } from '../engine/TourEngine';
 
 export interface ExecutionOptions {
   timeout?: number;
@@ -65,7 +66,8 @@ const OP_MAP: Record<string, string> = {
  */
 async function executeAction(
   action: Action,
-  options: Required<ExecutionOptions>
+  options: Required<ExecutionOptions>,
+  signal?: AbortSignal
 ): Promise<ToolResult> {
   const { target_id, value, target_page, explanation, state, steps } = action;
 
@@ -106,7 +108,7 @@ async function executeAction(
         return await executeToggleSwitch(target_id!, state!, options);
 
       case 'guided_tour':
-        return await executeGuidedTour(steps!, options);
+        return await executeGuidedTour(steps || [], options, signal);
 
       case 'ask_clarification':
         return await executeAskClarification(action.question!, action.options!, options);
@@ -321,38 +323,55 @@ async function executeToggleSwitch(
 /**
  * Execute a guided tour
  */
-async function executeGuidedTour(steps: any[], options: Required<ExecutionOptions>): Promise<ToolResult> {
+async function executeGuidedTour(
+  steps: any[],
+  options: Required<ExecutionOptions>,
+  signal?: AbortSignal
+): Promise<ToolResult> {
   options.onProgress('guided_tour', 'executing');
 
-  // This would typically delegate to a TourEngine
-  // For now, we'll execute each step sequentially
-  const results = [];
-
-  for (let i = 0; i < steps.length; i++) {
-    const step = steps[i];
-    options.onProgress(`tour:step:${i + 1}`, 'executing');
-
-    if (step.target_id) {
-      const resolution = await resolveTargetWithCascade(step.target_id, {
-        timeout: options.timeout,
-        allowSemanticLookup: options.allowSemanticLookup,
-      });
-      if (resolution.element) {
-        await animateCursorTo(resolution.element, options.onCursorMove);
-
-        // Highlight element (could be done via TourEngine)
-        highlightElement(resolution.element);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        removeHighlight(resolution.element);
-      }
-    }
-
-    options.onProgress(`tour:step:${i + 1}`, 'completed');
-    results.push({ step: i + 1, target: step.target_id });
+  if (typeof document === 'undefined' || !document.body) {
+    options.onProgress('guided_tour', 'failed');
+    return { id: crypto.randomUUID(), ok: false, error: 'Document body not available for guided tour' };
   }
 
-  options.onProgress('guided_tour', 'completed');
-  return { id: crypto.randomUUID(), ok: true, output: { tour: 'completed', steps: results } };
+  return new Promise<ToolResult>((resolve) => {
+    let resolved = false;
+    const finish = (completed: boolean) => {
+      if (resolved) return;
+      resolved = true;
+      options.onProgress('guided_tour', 'completed');
+      resolve({ id: crypto.randomUUID(), ok: true, output: { completed } });
+    };
+
+    const tour = new TourEngine({
+      onComplete: () => finish(true),
+      onSkip: () => finish(false),
+    });
+
+    if (signal) {
+      if (signal.aborted) {
+        tour.stop().catch(() => {});
+        finish(false);
+        return;
+      }
+      signal.addEventListener(
+        'abort',
+        () => {
+          tour.stop().catch(() => {});
+          finish(false);
+        },
+        { once: true }
+      );
+    }
+
+    tour.start(steps, document.body).catch((err) => {
+      if (resolved) return;
+      resolved = true;
+      options.onProgress('guided_tour', 'failed');
+      resolve({ id: crypto.randomUUID(), ok: false, error: String(err) });
+    });
+  });
 }
 
 /**
@@ -376,26 +395,6 @@ async function waitForNavigation(expectedPath: string, timeoutMs = 3000): Promis
     await new Promise(r => setTimeout(r, 50));
   }
   return false;
-}
-
-/**
- * Highlights an element for tour
- */
-function highlightElement(element: HTMLElement): void {
-  element.style.outline = '3px solid #FF4D4D';
-  element.style.outlineOffset = '2px';
-  element.style.boxShadow = '0 0 0 4px rgba(255, 77, 77, 0.3)';
-  element.setAttribute('data-ghost-highlight', 'true');
-}
-
-/**
- * Removes highlight from an element
- */
-function removeHighlight(element: HTMLElement): void {
-  element.style.outline = '';
-  element.style.outlineOffset = '';
-  element.style.boxShadow = '';
-  element.removeAttribute('data-ghost-highlight');
 }
 
 /**
@@ -428,7 +427,7 @@ export class ActionExecutor {
         this.isStopped = false;
         return { success: false, results, error: 'cancelled' };
       }
-      const result = await executeAction(actions[i], this.options);
+      const result = await executeAction(actions[i], this.options, this.abortController.signal);
       result.id = actions[i].id ?? result.id;
       results.push(result);
       if (this.abortController.signal.aborted || this.isStopped) {

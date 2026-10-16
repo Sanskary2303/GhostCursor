@@ -54,6 +54,22 @@ test('tracking question runs a tour on the orders page', async ({ page }) => {
   await ask(page, 'How do I track my order?');
   await approve(page);
   await expect(page).toHaveURL(/\/orders$/);
+
+  // Step 1: Click Next
+  const nextBtn = page.locator('#ghost-tour-next');
+  await expect(nextBtn).toBeVisible({ timeout: 10_000 });
+  await expect(nextBtn).toHaveText('Next');
+  await nextBtn.click();
+
+  // Step 2: Click Next
+  await expect(page.getByText('Step 2 of 3')).toBeVisible({ timeout: 10_000 });
+  await nextBtn.click();
+
+  // Step 3: Click Finish
+  await expect(page.getByText('Step 3 of 3')).toBeVisible({ timeout: 10_000 });
+  await expect(nextBtn).toHaveText('Finish');
+  await nextBtn.click();
+
   await expect(chat(page)).toContainText('executed successfully', { timeout: 30_000 });
 });
 

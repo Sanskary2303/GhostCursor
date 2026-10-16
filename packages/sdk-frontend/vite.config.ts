@@ -18,11 +18,9 @@ export default defineConfig({
       formats: ['es', 'umd'],
     },
     rollupOptions: {
-      external: ['react', 'react-dom', 'preact'],
+      external: ['preact'],
       output: {
         globals: {
-          react: 'React',
-          'react-dom': 'ReactDOM',
           preact: 'preact',
         },
       },

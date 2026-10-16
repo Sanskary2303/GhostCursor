@@ -4,6 +4,7 @@
  */
 
 import type { TourStep } from '../types';
+import { getRegisteredTarget } from '../dom-utils';
 
 export interface TourOptions {
   onStepChange?: (stepIndex: number, step: TourStep) => void;
@@ -245,8 +246,16 @@ export class TourEngine {
     const step = this.state.steps[index];
     if (!step) return;
 
-    // Find target element
-    const targetElement = this.findTargetElement(step.target_id);
+    // Find target element with retry
+    let targetElement = this.findTargetElement(step.target_id);
+    if (!targetElement) {
+      const start = Date.now();
+      while (!targetElement && Date.now() - start < 1500) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+        targetElement = this.findTargetElement(step.target_id);
+      }
+    }
+
     if (!targetElement) {
       console.warn(`[TourEngine] Target element not found: ${step.target_id}`);
       // Move to next step if target not found
@@ -259,8 +268,9 @@ export class TourEngine {
     }
 
     // Scroll target into view
-    targetElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-    await new Promise(resolve => setTimeout(resolve, 400));
+    const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    targetElement.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center', inline: 'center' });
+    await new Promise(resolve => setTimeout(resolve, reduced ? 50 : 400));
 
     // Get target position
     const rect = targetElement.getBoundingClientRect();
@@ -306,6 +316,21 @@ export class TourEngine {
     // Try aria-label
     element = document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(targetId)}"]`);
     if (element) return element;
+
+    // Try registered target
+    try {
+      const reg = getRegisteredTarget(targetId);
+      if (reg) {
+        if (typeof reg.resolve === 'function') {
+          const el = reg.resolve();
+          if (el) return el;
+        }
+        if ((reg as any).selector) {
+          const el = document.querySelector<HTMLElement>((reg as any).selector);
+          if (el) return el;
+        }
+      }
+    } catch {}
 
     return null;
   }

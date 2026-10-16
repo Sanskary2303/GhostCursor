@@ -1,4 +1,4 @@
-import type { Target } from '../core/types';
+import type { Target } from '@ghost-cursor/sdk';
 
 export interface GhostCursorProps {
   apiEndpoint?: string;
@@ -28,3 +28,4 @@ export interface Theme {
   position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
   [key: string]: any;
 }
+

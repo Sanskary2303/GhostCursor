@@ -42,9 +42,9 @@ EXPECTED_KINDS = {
     "awaiting_actions": {"actions", "cancel"},
     "awaiting_answer": {"answer", "cancel"},
 }
+from .tools.frontend_actions import FRONTEND_ACTION_TOOLS, FRONTEND_TOOL_NAMES, is_frontend_tool, normalize_schema
 from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore
 from .llm.vertex import VertexAIClient, MockVertexAIClient
-from .tools.frontend_actions import FRONTEND_ACTION_TOOLS
 from .tools.loopback import GatewayLoopbackHandler
 
 # Configure logging
@@ -268,21 +268,6 @@ def reject_origin_requests(request: Request):
 
 
 # ============================================================================
-# Request/Response Models
-# ============================================================================
-
-class PublicResponse(BaseModel):
-    """Public response projected to browser"""
-    protocolVersion: ProtocolVersion = "1"
-    runId: str
-    revision: int
-    status: RunStatus
-    reply: str
-    questions: Optional[list] = None
-    actions: Optional[list] = None
-
-
-# ============================================================================
 # Health Check
 # ============================================================================
 
@@ -327,6 +312,21 @@ async def create_run(
     init_globals()
 
     try:
+        # Validate and normalize customer tools
+        for t in request.tools:
+            if is_frontend_tool(t.name):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Customer tool name '{t.name}' collides with built-in frontend tool",
+                )
+            try:
+                t.parameters = normalize_schema(t.parameters)
+            except ValueError as e:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Invalid schema for tool '{t.name}': {e}",
+                )
+
         # Check for deduplication
         existing_run = await run_store.get_by_request_id(tenant_id, subject, request.requestId)
         if existing_run:

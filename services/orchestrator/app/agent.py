@@ -7,8 +7,11 @@ Uses Gemini 2.0 via Vertex AI for reasoning.
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
+
+from .tools.frontend_actions import FRONTEND_ACTION_TOOLS
 
 
 @dataclass
@@ -149,142 +152,4 @@ def _format_targets(targets: list) -> str:
 
 def _get_frontend_tool_declarations() -> List[Dict[str, Any]]:
     """Get standard frontend action tool declarations."""
-    return [
-        {
-            "name": "navigate",
-            "description": "Navigate to another page within the application. Use when the user needs to go to a different page before performing actions.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_page": {
-                        "type": "string",
-                        "description": "Target page route (e.g., 'settings', 'checkout', 'products/air-max-90')",
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "Human-readable explanation of why this navigation is needed",
-                    },
-                },
-                "required": ["target_page", "explanation"],
-            },
-        },
-        {
-            "name": "click",
-            "description": "Click a registered button, link, or tab. The target must be in the available targets list.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_id": {
-                        "type": "string",
-                        "description": "Logical target ID from the registered targets list",
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "Human-readable explanation of why this click is needed",
-                    },
-                },
-                "required": ["target_id", "explanation"],
-            },
-        },
-        {
-            "name": "fill_input",
-            "description": "Type or set a value in a registered input or textarea. Uses native value setters for React/Vue compatibility.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_id": {
-                        "type": "string",
-                        "description": "Logical target ID from the registered targets list",
-                    },
-                    "value": {
-                        "type": ["string", "number", "boolean"],
-                        "description": "Value to set in the input field",
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "Human-readable explanation of why this input is needed",
-                    },
-                },
-                "required": ["target_id", "value", "explanation"],
-            },
-        },
-        {
-            "name": "toggle_switch",
-            "description": "Toggle a switch or checkbox to true or false.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "target_id": {
-                        "type": "string",
-                        "description": "Logical target ID of the switch/checkbox",
-                    },
-                    "state": {
-                        "type": "boolean",
-                        "description": "Desired state: true (on/checked) or false (off/unchecked)",
-                    },
-                    "explanation": {
-                        "type": "string",
-                        "description": "Human-readable explanation of why this toggle is needed",
-                    },
-                },
-                "required": ["target_id", "state", "explanation"],
-            },
-        },
-        {
-            "name": "guided_tour",
-            "description": "Run an interactive guided tour that spotlights UI elements and explains them to the user.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "steps": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "target_id": {
-                                    "type": "string",
-                                    "description": "Element to highlight",
-                                },
-                                "message": {
-                                    "type": "string",
-                                    "description": "Explanation message to show",
-                                },
-                                "spotlight": {
-                                    "type": "boolean",
-                                    "description": "Whether to spotlight/highlight the element",
-                                    "default": True,
-                                },
-                            },
-                            "required": ["target_id", "message"],
-                        },
-                        "description": "List of tour steps, each highlighting an element",
-                    },
-                },
-                "required": ["steps"],
-            },
-        },
-        {
-            "name": "ask_clarification",
-            "description": "Ask the user a clarifying question when intent is ambiguous or required information is missing.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "question": {
-                        "type": "string",
-                        "description": "The question to ask the user",
-                        "maxLength": 1000,
-                    },
-                    "options": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "maxLength": 200,
-                        },
-                        "maxItems": 10,
-                        "description": "Available answer options for the user",
-                    },
-                },
-                "required": ["question", "options"],
-            },
-        },
-    ]
+    return copy.deepcopy(FRONTEND_ACTION_TOOLS)

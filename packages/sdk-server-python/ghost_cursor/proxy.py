@@ -256,105 +256,6 @@ class GhostCursorBackend:
         self.chat_store = config.chat_store
         self._http_client: Optional[httpx.AsyncClient] = None
 
-        # Register default frontend action tools
-        self._register_frontend_tools()
-
-    def _register_frontend_tools(self):
-        """Register the standard frontend action tools"""
-        from .tools import FrontendActionTool
-
-        # These are declared so the orchestrator knows they exist
-        # Actual execution happens on the frontend
-        frontend_tools = [
-            FrontendActionTool(
-                name="navigate",
-                description="Navigate to another page within the application",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "target_page": {"type": "string", "description": "Target page route"},
-                        "explanation": {"type": "string", "description": "Why this navigation is needed"},
-                    },
-                    "required": ["target_page", "explanation"],
-                },
-            ),
-            FrontendActionTool(
-                name="click",
-                description="Click a registered button, link, or tab",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "target_id": {"type": "string", "description": "Logical target ID to click"},
-                        "explanation": {"type": "string", "description": "Why this click is needed"},
-                    },
-                    "required": ["target_id", "explanation"],
-                },
-            ),
-            FrontendActionTool(
-                name="fill_input",
-                description="Type or set a value in a registered input or textarea",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "target_id": {"type": "string", "description": "Logical target ID"},
-                        "value": {"type": ["string", "number", "boolean"], "description": "Value to set"},
-                        "explanation": {"type": "string", "description": "Why this input is needed"},
-                    },
-                    "required": ["target_id", "value", "explanation"],
-                },
-            ),
-            FrontendActionTool(
-                name="toggle_switch",
-                description="Toggle a switch or checkbox to true or false",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "target_id": {"type": "string", "description": "Logical target ID"},
-                        "state": {"type": "boolean", "description": "Desired state (true/false)"},
-                        "explanation": {"type": "string", "description": "Why this toggle is needed"},
-                    },
-                    "required": ["target_id", "state", "explanation"],
-                },
-            ),
-            FrontendActionTool(
-                name="guided_tour",
-                description="Run an interactive guided tour spotlighting elements with explanations",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "steps": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "target_id": {"type": "string"},
-                                    "message": {"type": "string"},
-                                    "spotlight": {"type": "boolean", "default": True},
-                                },
-                                "required": ["target_id", "message"],
-                            },
-                        },
-                    },
-                    "required": ["steps"],
-                },
-            ),
-            FrontendActionTool(
-                name="ask_clarification",
-                description="Ask the user a clarifying question before proceeding",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "question": {"type": "string", "description": "Question to ask"},
-                        "options": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
-                    },
-                    "required": ["question", "options"],
-                },
-            ),
-        ]
-
-        for tool in frontend_tools:
-            self.tool_registry.register(tool)
-
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get or create HTTP client"""
         if self._http_client is None:
@@ -414,8 +315,9 @@ class GhostCursorBackend:
         return decorator
 
     def get_tool_declarations(self) -> List[Dict[str, Any]]:
-        """Get all registered tool declarations for the orchestrator"""
-        return [tool.to_declaration() for tool in self.tool_registry.get_all()]
+        """Get all registered customer backend tool declarations for the orchestrator"""
+        from .tools import BackendTool
+        return [tool.to_declaration() for tool in self.tool_registry.get_all() if isinstance(tool, BackendTool)]
 
     async def handle_turn(
         self,

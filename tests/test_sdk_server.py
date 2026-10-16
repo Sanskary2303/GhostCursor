@@ -481,4 +481,24 @@ async def test_filter_editing_reply_is_accepted():
     assert result["status"] == "completed"
 
 
+@pytest.mark.asyncio
+async def test_backend_only_declares_customer_backend_tools():
+    """GhostCursorBackend.get_tool_declarations() only returns registered BackendTool instances"""
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+    assert backend.get_tool_declarations() == []
+
+    @backend.register_tool(
+        name="custom_lookup",
+        description="Lookup custom data",
+        schema={"type": "object", "properties": {"query": {"type": "string"}}},
+    )
+    def custom_lookup(query: str) -> dict:
+        return {"result": query}
+
+    decls = backend.get_tool_declarations()
+    assert len(decls) == 1
+    assert decls[0]["name"] == "custom_lookup"
+
+
+
 

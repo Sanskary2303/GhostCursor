@@ -1142,6 +1142,99 @@ def test_validate_actions_strict_rules():
         validate_actions([{"type": "click", "target_id": f"btn.{i}"} for i in range(13)])
 
 
+def test_normalize_schema_nested_and_optional_pydantic():
+    """Pydantic model with nested model and Optional field normalizes without title or $ref, and with nullable"""
+    from services.orchestrator.app.tools.frontend_actions import normalize_schema
+    from pydantic import BaseModel
+    from typing import Any, Optional
+
+    class SubItem(BaseModel):
+        sku: str
+        quantity: Optional[int] = None
+
+    class QueryOrder(BaseModel):
+        order_id: str
+        item: SubItem
+        notes: Optional[str] = None
+
+    raw_schema = QueryOrder.model_json_schema()
+    normalized = normalize_schema(raw_schema)
+
+    def assert_no_key_recursive(d: Any, forbidden_key: str):
+        if isinstance(d, dict):
+            assert forbidden_key not in d, f"Key {forbidden_key} should not be in normalized schema: {d}"
+            for v in d.values():
+                assert_no_key_recursive(v, forbidden_key)
+        elif isinstance(d, list):
+            for item in d:
+                assert_no_key_recursive(item, forbidden_key)
+
+    assert_no_key_recursive(normalized, "title")
+    assert_no_key_recursive(normalized, "$ref")
+    assert_no_key_recursive(normalized, "$defs")
+    assert_no_key_recursive(normalized, "definitions")
+
+    # Check nullable
+    assert normalized["properties"]["notes"]["nullable"] is True
+    assert normalized["properties"]["item"]["properties"]["quantity"]["nullable"] is True
+
+    # Check nested inlining
+    assert normalized["properties"]["item"]["type"] == "object"
+    assert "sku" in normalized["properties"]["item"]["properties"]
+
+
+@pytest.mark.asyncio
+async def test_tool_named_frontend_tool_rejected(auth_headers):
+    """Customer tool colliding with frontend action (e.g. 'click') returns 422"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "check order",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+        "tools": [
+            {
+                "name": "click",
+                "description": "custom click",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 422
+        error_msg = res.json().get("error") or str(res.json().get("detail", ""))
+        assert "collides" in error_msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_tool_with_list_type_rejected(auth_headers):
+    """Customer tool with type as a list is rejected with 422"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "check order",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+        "tools": [
+            {
+                "name": "lookup_item",
+                "description": "Lookup an item",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "val": {"type": ["string", "number"]},
+                    },
+                },
+            }
+        ],
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 422
+
+
+
 
 
 

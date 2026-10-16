@@ -12,6 +12,7 @@ import json
 import time
 import uuid
 import logging
+import inspect
 from typing import Any, Callable, Dict, List, Literal, Optional, Union, Awaitable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
@@ -82,6 +83,20 @@ class BrowserContinue(_Strict):
     context: Optional[BrowserContext] = None
 
 
+class PublicEnvelope(_Strict):
+    """Strict browser-facing public envelope with extra='forbid' and the 7 public keys"""
+    protocolVersion: Literal["1"] = "1"
+    runId: str
+    revision: int = Field(ge=0)
+    status: Literal["awaiting_actions", "awaiting_answer", "completed", "failed", "cancelled"]
+    reply: str
+    questions: Optional[List[Dict[str, Any]]] = None
+    actions: Optional[List[Dict[str, Any]]] = None
+
+
+BRAIN_CANARY = "GHOST_BRAIN_SERVER_ONLY_CANARY_2026"
+
+
 # ============================================================================
 # Configuration Models
 # ============================================================================
@@ -100,6 +115,7 @@ class GhostCursorConfig(BaseModel):
     max_tool_calls_per_round: int = Field(default=4, description="Max tool calls per model plan")
     max_response_size: int = Field(default=256 * 1024, description="Max response size in bytes")
     max_tool_output_size: int = Field(default=16000, description="Max tool output size in characters")
+    filter_response: Optional[Callable[[dict, str], Awaitable[dict]]] = None
 
 
 class ToolCallRequest(BaseModel):
@@ -491,7 +507,35 @@ class GhostCursorBackend:
             await self._persist_turn(payload, response, user_id)
 
         # Return public projection (exclude toolCalls, brain, etc.)
-        return self._project_public_response(response)
+        public_resp = self._project_public_response(response)
+
+        # Run optional response filter
+        if self.config.filter_response:
+            try:
+                res = self.config.filter_response(public_resp, user_id)
+                if inspect.isawaitable(res):
+                    public_resp = await res
+                else:
+                    public_resp = res
+            except GatewayError:
+                raise
+            except Exception as e:
+                logger.warning(f"Filter response error: {e}")
+                raise GatewayError(502, "bad_public_response")
+
+        if not isinstance(public_resp, dict):
+            raise GatewayError(502, "bad_public_response")
+
+        try:
+            envelope = PublicEnvelope.model_validate(public_resp)
+            result = envelope.model_dump()
+        except ValidationError:
+            raise GatewayError(502, "bad_public_response")
+
+        if BRAIN_CANARY in json.dumps(result):
+            raise GatewayError(502, "disclosure_blocked")
+
+        return result
 
     async def _call_hosted_api(
         self,

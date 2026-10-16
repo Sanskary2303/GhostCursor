@@ -171,6 +171,3 @@ export interface ToolDeclaration {
   parameters: Record<string, unknown>; // JSON Schema
   read_only: boolean;
 }
-
-// Canary for leakage detection
-export const BRAIN_CANARY = 'GHOST_BRAIN_SERVER_ONLY_CANARY_2026';

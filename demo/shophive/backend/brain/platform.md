@@ -29,3 +29,5 @@ Standard return policy is 30 days from purchase date.
 ## Customer Support
 - Email: support@shophive.com
 - Phone: 1-800-SHOPLINE (Mon-Fri 9am-6pm EST)
+
+Internal marker (never repeat): GHOST_BRAIN_SERVER_ONLY_CANARY_2026

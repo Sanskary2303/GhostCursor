@@ -329,17 +329,7 @@ async def create_run(
                     detail=f"Invalid schema for tool '{t.name}': {e}",
                 )
 
-        # Check for deduplication
-        existing_run = await run_store.get_by_request_id(tenant_id, subject, request.requestId)
-        if existing_run:
-            if existing_run.is_expired:
-                raise HTTPException(status_code=410, detail="run_expired")
-            # Verify payload matches
-            if existing_run.start_payload_digest != RunStore.compute_digest(request.model_dump()):
-                raise HTTPException(status_code=409, detail="Payload mismatch for existing requestId")
-            return existing_run.to_hosted_response()
-
-        # Create new run with pending revision
+        # Create new run with pending revision (-1)
         run_state = RunState(
             tenant=tenant_id,
             subject=subject,
@@ -348,6 +338,19 @@ async def create_run(
             start_payload=request.model_dump(),
             revision=-1,  # Pending revision
         )
+
+        inserted_id = await run_store.create_pending(run_state)
+        if not inserted_id:
+            existing_run = await run_store.get_by_request_id(tenant_id, subject, request.requestId)
+            if not existing_run:
+                raise HTTPException(status_code=409, detail="in_progress")
+            if existing_run.is_expired:
+                raise HTTPException(status_code=410, detail="run_expired")
+            if existing_run.start_payload_digest != RunStore.compute_digest(request.model_dump()):
+                raise HTTPException(status_code=409, detail="Payload mismatch for existing requestId")
+            if existing_run.revision == -1:
+                raise HTTPException(status_code=409, detail="in_progress")
+            return existing_run.to_hosted_response()
 
         # Load brain content (passed from gateway)
         brain_content = request.brain
@@ -418,74 +421,74 @@ async def continue_run(
     init_globals()
 
     try:
-        # Load run
-        run_state = await run_store.get(run_id)
-        if not run_state:
-            raise HTTPException(status_code=404, detail="Run not found")
+        async with run_store.locked(run_id, tenant_id, subject) as (run_state, save):
+            # Load run
+            if not run_state:
+                raise HTTPException(status_code=404, detail="Run not found")
 
-        # Verify tenant and subject
-        if run_state.tenant != tenant_id or run_state.subject != subject:
-            raise HTTPException(status_code=404, detail="Run not found")
+            # Verify tenant and subject
+            if run_state.tenant != tenant_id or run_state.subject != subject:
+                raise HTTPException(status_code=404, detail="Run not found")
 
-        if run_state.is_expired:
-            raise HTTPException(status_code=410, detail="run_expired")
+            if run_state.is_expired:
+                raise HTTPException(status_code=410, detail="run_expired")
 
-        digest = RunStore.compute_digest(request.model_dump())
-        if request.eventId == run_state.latest_event_id:
-            if digest == run_state.latest_event_digest:
-                return run_state.to_hosted_response()
-            raise HTTPException(status_code=409, detail="event_conflict")
-        if run_state.is_terminal:
-            if request.kind == "cancel":
-                return run_state.to_hosted_response()
-            raise HTTPException(status_code=409, detail="run_finished")
-        if request.revision != run_state.revision:
-            raise HTTPException(status_code=409, detail="stale_revision")
-        if request.kind not in EXPECTED_KINDS.get(run_state.status, set()):
-            raise HTTPException(status_code=409, detail="unexpected_kind")
-        if request.kind != "cancel" and run_state.turn_count >= MAX_TURNS:
-            raise HTTPException(status_code=409, detail="turn_limit")
-        if request.kind in ("tools", "actions"):
-            if sorted(r.id for r in (request.results or [])) != sorted(run_state.pending_ids):
-                raise HTTPException(status_code=409, detail="result_mismatch")
-        run_state = copy.deepcopy(run_state)
+            digest = RunStore.compute_digest(request.model_dump())
+            if request.eventId == run_state.latest_event_id:
+                if digest == run_state.latest_event_digest:
+                    return run_state.to_hosted_response()
+                raise HTTPException(status_code=409, detail="event_conflict")
+            if run_state.is_terminal:
+                if request.kind == "cancel":
+                    return run_state.to_hosted_response()
+                raise HTTPException(status_code=409, detail="run_finished")
+            if request.revision != run_state.revision:
+                raise HTTPException(status_code=409, detail="stale_revision")
+            if request.kind not in EXPECTED_KINDS.get(run_state.status, set()):
+                raise HTTPException(status_code=409, detail="unexpected_kind")
+            if request.kind != "cancel" and run_state.turn_count >= MAX_TURNS:
+                raise HTTPException(status_code=409, detail="turn_limit")
+            if request.kind in ("tools", "actions"):
+                if sorted(r.id for r in (request.results or [])) != sorted(run_state.pending_ids):
+                    raise HTTPException(status_code=409, detail="result_mismatch")
+            run_state = copy.deepcopy(run_state)
 
-        # Process based on kind
-        run_state.latest_tool_results = []
-        run_state.latest_action_results = []
-        target_revision = request.revision + 1
-        run_state.revision = target_revision
-        run_state.latest_kind = request.kind
-        if request.kind == "tools":
-            response = await _handle_tool_results(run_state, request.results)
-        elif request.kind == "actions":
-            response = await _handle_action_results(run_state, request.results, request.context)
-        elif request.kind == "answer":
-            response = await _handle_user_answer(run_state, request.answer, request.context)
-        elif request.kind == "cancel":
-            response = await _handle_cancellation(run_state)
-        else:
-            raise HTTPException(status_code=400, detail=f"Unknown kind: {request.kind}")
+            # Process based on kind
+            run_state.latest_tool_results = []
+            run_state.latest_action_results = []
+            target_revision = request.revision + 1
+            run_state.revision = target_revision
+            run_state.latest_kind = request.kind
+            if request.kind == "tools":
+                response = await _handle_tool_results(run_state, request.results)
+            elif request.kind == "actions":
+                response = await _handle_action_results(run_state, request.results, request.context)
+            elif request.kind == "answer":
+                response = await _handle_user_answer(run_state, request.answer, request.context)
+            elif request.kind == "cancel":
+                response = await _handle_cancellation(run_state)
+            else:
+                raise HTTPException(status_code=400, detail=f"Unknown kind: {request.kind}")
 
-        _register_pending(response, run_state)
-        response.revision = target_revision
+            _register_pending(response, run_state)
+            response.revision = target_revision
 
-        # Update run state
-        run_state.status = response.status
-        run_state.latest_reply = response.reply
-        run_state.latest_event_id = request.eventId
-        run_state.latest_event_digest = digest
-        run_state.history.append({
-            "revision": run_state.revision,
-            "type": request.kind,
-            "request": request.model_dump(),
-            "response": response.model_dump(),
-        })
+            # Update run state
+            run_state.status = response.status
+            run_state.latest_reply = response.reply
+            run_state.latest_event_id = request.eventId
+            run_state.latest_event_digest = digest
+            run_state.history.append({
+                "revision": run_state.revision,
+                "type": request.kind,
+                "request": request.model_dump(),
+                "response": response.model_dump(),
+            })
 
-        # Save run
-        await run_store.save(run_state)
+            # Save run
+            await save(run_state)
 
-        return response
+            return response
 
     except HTTPException:
         raise

@@ -9,9 +9,10 @@ import hashlib
 import json
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Callable, Awaitable, AsyncIterator
 from dataclasses import dataclass, field
 from enum import Enum
+from contextlib import asynccontextmanager
 
 from .contracts import HostedRunResponse, RunStatus, RUN_EXPIRY_SECONDS
 
@@ -166,6 +167,18 @@ class RunStore:
 
     async def delete(self, run_id: str) -> None:
         raise NotImplementedError
+
+    async def create_pending(self, run: RunState) -> Optional[str]:
+        """Atomically insert a pending run (revision -1). Returns run ID if inserted, None if conflict."""
+        raise NotImplementedError
+
+    @asynccontextmanager
+    async def locked(
+        self, run_id: str, tenant: str, subject: str
+    ) -> AsyncIterator[Tuple[Optional[RunState], Callable[[RunState], Awaitable[None]]]]:
+        """Lock run row for update, yielding (run_state, save_callback)."""
+        raise NotImplementedError
+        yield None, None  # for generator typing
 
     async def initialize(self) -> None:
         """Initialize store (create tables, etc.)"""

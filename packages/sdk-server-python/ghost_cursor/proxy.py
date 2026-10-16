@@ -13,6 +13,8 @@ import time
 import uuid
 import logging
 import inspect
+import asyncio
+from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, List, Literal, Optional, Union, Awaitable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
@@ -27,6 +29,7 @@ from pydantic import (
     StrictInt,
     StrictStr,
     ValidationError,
+    field_validator,
 )
 
 from .storage import ChatStore
@@ -116,7 +119,24 @@ class GhostCursorConfig(BaseModel):
     max_tool_calls_per_round: int = Field(default=4, description="Max tool calls per model plan")
     max_response_size: int = Field(default=256 * 1024, description="Max response size in bytes")
     max_tool_output_size: int = Field(default=16000, description="Max tool output size in characters")
+    tool_timeout: float = Field(default=10.0, description="Tool execution timeout in seconds")
     filter_response: Optional[Callable[[dict, str], Awaitable[dict]]] = None
+
+    @field_validator("service_url")
+    @classmethod
+    def validate_service_url(cls, v: str) -> str:
+        parsed = urlsplit(v)
+        if not parsed.scheme or not parsed.hostname:
+            raise ValueError("service_url must have a scheme and host")
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("service_url scheme must be https or http")
+        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+            raise ValueError("http service_url is only allowed for localhost, 127.0.0.1, or ::1")
+        if parsed.username or parsed.password:
+            raise ValueError("service_url must not contain username or password")
+        if parsed.query or parsed.fragment:
+            raise ValueError("service_url must not contain query or fragment")
+        return v
 
 
 class ToolCallRequest(BaseModel):
@@ -263,6 +283,7 @@ class GhostCursorBackend:
             self._http_client = httpx.AsyncClient(
                 timeout=httpx.Timeout(self.config.request_timeout),
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+                follow_redirects=False,
             )
         return self._http_client
 
@@ -289,12 +310,28 @@ class GhostCursorBackend:
 
         def _make_tool(fn):
             params = schema
-            if hasattr(schema, "model_json_schema"):
+            schema_model = None
+            if isinstance(schema, type) and issubclass(schema, BaseModel):
+                schema_model = schema
+                if hasattr(schema, "model_json_schema"):
+                    params = schema.model_json_schema()
+                else:
+                    params = schema.schema()
+            elif hasattr(schema, "model_json_schema"):
                 params = schema.model_json_schema()
             elif hasattr(schema, "schema"):
                 params = schema.schema()
             elif not isinstance(schema, dict):
                 params = {"type": "object", "properties": {}}
+
+            if schema_model is None and fn:
+                try:
+                    sig = inspect.signature(fn)
+                    p_list = list(sig.parameters.values())
+                    if p_list and isinstance(p_list[0].annotation, type) and issubclass(p_list[0].annotation, BaseModel):
+                        schema_model = p_list[0].annotation
+                except Exception:
+                    pass
 
             tool = BackendTool(
                 name=name,
@@ -302,6 +339,7 @@ class GhostCursorBackend:
                 parameters=params,
                 read_only=read_only,
                 execute_fn=fn,
+                schema_model=schema_model,
             )
             self.tool_registry.register(tool)
             return tool
@@ -482,26 +520,33 @@ class GhostCursorBackend:
             post_data = request.model_dump(exclude_none=True)
 
         try:
-            response = await client.post(
-                url,
-                json=post_data,
-                headers=headers,
-            )
+            async with client.stream("POST", url, json=post_data, headers=headers) as response:
+                if response.status_code >= 400:
+                    error_map = {404: "run_not_found", 409: "conflict", 410: "run_expired"}
+                    if response.status_code in error_map:
+                        raise GatewayError(response.status_code, error_map[response.status_code])
+                    raise GatewayError(502, "upstream_error")
+                elif response.status_code < 200 or response.status_code >= 300:
+                    raise GatewayError(502, "upstream_error")
+
+                chunks = []
+                total_bytes = 0
+                async for chunk in response.aiter_bytes():
+                    total_bytes += len(chunk)
+                    if total_bytes > self.config.max_response_size:
+                        raise GatewayError(502, "upstream_too_large")
+                    chunks.append(chunk)
+
+                body = b"".join(chunks)
+        except GatewayError:
+            raise
         except httpx.HTTPError:
             raise GatewayError(502, "upstream_unavailable")
 
-        if response.status_code >= 400:
-            error_map = {404: "run_not_found", 409: "conflict", 410: "run_expired"}
-            if response.status_code in error_map:
-                raise GatewayError(response.status_code, error_map[response.status_code])
+        try:
+            data = json.loads(body)
+        except Exception:
             raise GatewayError(502, "upstream_error")
-
-        data = response.json()
-
-        # Validate response size
-        response_text = json.dumps(data)
-        if len(response_text.encode()) > self.config.max_response_size:
-            raise ValueError("Response exceeds maximum size")
 
         return HostedRunResponse(**data)
 
@@ -513,6 +558,16 @@ class GhostCursorBackend:
         user_id: str,
     ) -> List[ToolCallResponse]:
         """Execute tool calls locally via Gateway Loopback"""
+        if len(tool_calls) > self.config.max_tool_calls_per_round:
+            return [
+                ToolCallResponse(
+                    id=tc.id,
+                    ok=False,
+                    error="too many tool calls in one plan",
+                )
+                for tc in tool_calls
+            ]
+
         results = []
 
         for tool_call in tool_calls:
@@ -533,10 +588,29 @@ class GhostCursorBackend:
                 ))
                 continue
 
+            # Validate arguments
+            try:
+                tool.validate_arguments(tool_call.parameters)
+            except Exception:
+                results.append(ToolCallResponse(
+                    id=tool_call.id,
+                    ok=False,
+                    error="invalid arguments",
+                ))
+                continue
+
             try:
                 # Execute with user context
-                context = {"user_id": user_id, "run_id": run_id, "revision": revision}
-                output = await tool.execute(tool_call.parameters, context)
+                context = {
+                    "user_id": user_id,
+                    "run_id": run_id,
+                    "revision": revision,
+                    "idempotency_key": f"{run_id}:{revision}:{tool_call.id}",
+                }
+                output = await asyncio.wait_for(
+                    tool.execute(tool_call.parameters, context),
+                    timeout=self.config.tool_timeout,
+                )
 
                 # Truncate output if too large
                 output_str = json.dumps(output)
@@ -547,6 +621,12 @@ class GhostCursorBackend:
                     id=tool_call.id,
                     ok=True,
                     output=output,
+                ))
+            except asyncio.TimeoutError:
+                results.append(ToolCallResponse(
+                    id=tool_call.id,
+                    ok=False,
+                    error="tool timed out",
                 ))
             except Exception as e:
                 results.append(ToolCallResponse(

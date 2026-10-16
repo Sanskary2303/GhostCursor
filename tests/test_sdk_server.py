@@ -10,7 +10,7 @@ import json
 import time
 import uuid
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from ghost_cursor import (
     GhostCursorBackend,
@@ -921,6 +921,375 @@ async def test_session_auto_summary_after_four_user_turns():
     assert updated_session is not None
     assert updated_session.summary is not None
     assert len(updated_session.summary) > 0
+
+
+# ============================================================================
+# Step 25: Gateway Hardening Tests (G-3, G-4)
+# ============================================================================
+
+def test_service_url_validation():
+    """service_url must be https or http for localhost/127.0.0.1/::1, with no user/pass/query/fragment"""
+    valid_urls = [
+        "http://localhost:8080",
+        "http://127.0.0.1:8080",
+        "http://[::1]:8080",
+        "https://cloud.ghostcursor.ai",
+        "https://cloud.ghostcursor.ai/v1/runs",
+    ]
+    for url in valid_urls:
+        cfg = GhostCursorConfig(
+            api_key="test-key-shophive-demo-0123456789abcdef",
+            service_url=url,
+        )
+        assert cfg.service_url == url
+
+    invalid_urls = [
+        "http://cloud.ghostcursor.ai",                     # http on non-localhost
+        "http://192.168.1.1:8080",                         # http on non-loopback IP
+        "https://user:pass@cloud.ghostcursor.ai",           # user/pass
+        "https://cloud.ghostcursor.ai?token=secret",        # query
+        "https://cloud.ghostcursor.ai#section",             # fragment
+        "ftp://localhost:8080",                             # scheme not http/https
+        "not-a-valid-url",                                  # no scheme
+    ]
+    for url in invalid_urls:
+        with pytest.raises(ValidationError):
+            GhostCursorConfig(
+                api_key="test-key-shophive-demo-0123456789abcdef",
+                service_url=url,
+            )
+
+
+@pytest.mark.asyncio
+async def test_upstream_too_large_streaming():
+    """Streaming response exceeding max_response_size aborts with GatewayError(502, 'upstream_too_large')"""
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        max_response_size=100,  # 100 bytes cap
+    )
+
+    def mock_handler(request):
+        # Generate 500 bytes response
+        payload = {
+            "protocolVersion": "1",
+            "runId": str(uuid.uuid4()),
+            "revision": 0,
+            "status": "completed",
+            "reply": "x" * 400,
+        }
+        return httpx.Response(200, content=json.dumps(payload).encode())
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Hello",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }, "user_123")
+
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "upstream_too_large"
+
+
+@pytest.mark.asyncio
+async def test_http_client_follow_redirects_false():
+    """HTTP client has follow_redirects=False, upstream redirects map to 502 upstream_error"""
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+    client = await backend._get_http_client()
+    assert client.follow_redirects is False
+
+    backend._http_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: httpx.Response(302, headers={"Location": "/redirect"}))
+    )
+
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Hello",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }, "user_123")
+
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "upstream_error"
+
+
+@pytest.mark.asyncio
+async def test_too_many_tool_calls_in_one_plan():
+    """If len(toolcalls) > max_tool_calls_per_round, answer every call with ok: false, error: 'too many tool calls in one plan'"""
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        max_tool_calls_per_round=4,
+    )
+
+    run_id = str(uuid.uuid4())
+    recorded_continue_body = None
+
+    def mock_handler(request):
+        nonlocal recorded_continue_body
+        body = json.loads(request.content)
+        if request.url.path.endswith("/continue"):
+            recorded_continue_body = body
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Handled tool failure",
+                "questions": None,
+                "actions": None,
+            })
+        # Initial response emits 5 tool calls (> 4 limit)
+        tool_calls = [
+            {"id": f"tc_{i}", "tool": "lookup", "parameters": {}}
+            for i in range(5)
+        ]
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Executing tools...",
+            "questions": None,
+            "actions": None,
+            "toolCalls": tool_calls,
+        })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Run many tools",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_123")
+
+    assert recorded_continue_body is not None
+    results = recorded_continue_body["results"]
+    assert len(results) == 5
+    for r in results:
+        assert r["ok"] is False
+        assert r["error"] == "too many tool calls in one plan"
+
+
+@pytest.mark.asyncio
+async def test_argument_validation_pydantic_and_dict():
+    """Tool arguments are validated before execution: Pydantic -> model_validate, Dict -> jsonschema.validate"""
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+
+    class OrderParams(BaseModel):
+        order_id: str
+
+    executed_tools = []
+
+    @backend.register_tool(
+        name="lookup_pydantic",
+        description="Lookup via Pydantic model",
+        schema=OrderParams,
+    )
+    def lookup_pydantic(params: OrderParams):
+        executed_tools.append("lookup_pydantic")
+        return {"status": "ok"}
+
+    @backend.register_tool(
+        name="lookup_dict",
+        description="Lookup via Dict schema",
+        schema={
+            "type": "object",
+            "properties": {
+                "sku": {"type": "string"},
+                "quantity": {"type": "integer"},
+            },
+            "required": ["sku", "quantity"],
+        },
+    )
+    def lookup_dict(sku: str, quantity: int):
+        executed_tools.append("lookup_dict")
+        return {"status": "ok"}
+
+    run_id = str(uuid.uuid4())
+    recorded_continue_body = None
+
+    def mock_handler(request):
+        nonlocal recorded_continue_body
+        body = json.loads(request.content)
+        if request.url.path.endswith("/continue"):
+            recorded_continue_body = body
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Finished",
+                "questions": None,
+                "actions": None,
+            })
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Executing...",
+            "questions": None,
+            "actions": None,
+            "toolCalls": [
+                {"id": "tc_pydantic", "tool": "lookup_pydantic", "parameters": {}},  # missing required order_id
+                {"id": "tc_dict", "tool": "lookup_dict", "parameters": {"sku": "S1", "quantity": "not_an_int"}},  # invalid type
+            ],
+        })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Run invalid tools",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_123")
+
+    assert recorded_continue_body is not None
+    results = recorded_continue_body["results"]
+    assert len(results) == 2
+    assert results[0]["id"] == "tc_pydantic"
+    assert results[0]["ok"] is False
+    assert results[0]["error"] == "invalid arguments"
+
+    assert results[1]["id"] == "tc_dict"
+    assert results[1]["ok"] is False
+    assert results[1]["error"] == "invalid arguments"
+
+    # Neither tool function should have run
+    assert len(executed_tools) == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_context_idempotency_key():
+    """Tool receives idempotency_key: f'{run_id}:{revision}:{tool_call.id}' in context"""
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+
+    received_context = {}
+
+    @backend.register_tool(
+        name="test_context_tool",
+        description="Inspects context",
+        schema={"type": "object", "properties": {}},
+    )
+    async def test_context_tool(params: dict, context: dict):
+        received_context.update(context)
+        return {"status": "ok"}
+
+    run_id = str(uuid.uuid4())
+
+    def mock_handler(request):
+        if request.url.path.endswith("/continue"):
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Done",
+                "questions": None,
+                "actions": None,
+            })
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Executing...",
+            "questions": None,
+            "actions": None,
+            "toolCalls": [
+                {"id": "tc_idem_1", "tool": "test_context_tool", "parameters": {}},
+            ],
+        })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Inspect context",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_123")
+
+    assert received_context.get("idempotency_key") == f"{run_id}:1:tc_idem_1"
+    assert received_context.get("user_id") == "user_123"
+    assert received_context.get("run_id") == run_id
+    assert received_context.get("revision") == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_timeout():
+    """Tool execution exceeding config.tool_timeout fails with ok: false, error: 'tool timed out'"""
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tool_timeout=0.05,  # 50ms timeout
+    )
+
+    @backend.register_tool(
+        name="sleepy_tool",
+        description="Tool that takes too long",
+        schema={"type": "object", "properties": {}},
+    )
+    async def sleepy_tool(params: dict, context: dict):
+        await asyncio.sleep(0.5)  # 500ms > 50ms
+        return {"status": "finished"}
+
+    run_id = str(uuid.uuid4())
+    recorded_continue_body = None
+
+    def mock_handler(request):
+        nonlocal recorded_continue_body
+        body = json.loads(request.content)
+        if request.url.path.endswith("/continue"):
+            recorded_continue_body = body
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Timeout handled",
+                "questions": None,
+                "actions": None,
+            })
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Executing...",
+            "questions": None,
+            "actions": None,
+            "toolCalls": [
+                {"id": "tc_slow", "tool": "sleepy_tool", "parameters": {}},
+            ],
+        })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Run slow tool",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_123")
+
+    assert recorded_continue_body is not None
+    results = recorded_continue_body["results"]
+    assert len(results) == 1
+    assert results[0]["id"] == "tc_slow"
+    assert results[0]["ok"] is False
+    assert results[0]["error"] == "tool timed out"
+
 
 
 

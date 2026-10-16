@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Callable, Union, get_type_hints, A
 from dataclasses import dataclass, field
 
 from pydantic import BaseModel, Field, validator, create_model, ValidationError
+import jsonschema
 
 
 # ============================================================================
@@ -59,69 +60,17 @@ class Tool(ABC):
             "parameters": self.parameters,
         }
 
-    def validate_arguments(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate and coerce arguments according to schema"""
-        if not self.parameters.get("type"):
+    def validate_arguments(self, arguments: Any) -> Any:
+        """Validate arguments against Pydantic schema or JSON Schema"""
+        schema_model = getattr(self, "schema_model", None)
+        if schema_model is not None and isinstance(schema_model, type) and issubclass(schema_model, BaseModel):
+            return schema_model.model_validate(arguments)
+        if isinstance(self.parameters, type) and issubclass(self.parameters, BaseModel):
+            return self.parameters.model_validate(arguments)
+        if isinstance(self.parameters, dict) and self.parameters:
+            jsonschema.validate(instance=arguments, schema=self.parameters)
             return arguments
-
-        try:
-            # For demo purposes, simple validation
-            # In production, would use proper Pydantic/JSON Schema validation
-            return self._validate_simple_schema(arguments, self.parameters)
-        except ValidationError as e:
-            raise ValueError(f"Invalid arguments for tool {self.name}: {e}")
-
-    def _validate_simple_schema(self, arguments: Dict[str, Any], schema: Dict[str, Any]) -> Dict[str, Any]:
-        """Simple schema validation for basic types"""
-        result = {}
-
-        properties = schema.get("properties", {})
-        required = schema.get("required", [])
-
-        for key, schema_info in properties.items():
-            if key in arguments:
-                value = arguments[key]
-                expected_type = schema_info.get("type")
-
-                if expected_type == "string" and isinstance(value, str):
-                    # Apply string constraints
-                    if "maxLength" in schema_info and len(value) > schema_info["maxLength"]:
-                        raise ValueError(f"String '{key}' exceeds max length")
-                    result[key] = value
-                elif expected_type == "number" and isinstance(value, (int, float)):
-                    result[key] = value
-                elif expected_type == "boolean" and isinstance(value, bool):
-                    result[key] = value
-                elif expected_type == "array" and isinstance(value, list):
-                    result[key] = value
-                elif expected_type == "object" and isinstance(value, dict):
-                    result[key] = value
-                else:
-                    # Try type coercion
-                    result[key] = self._coerce_type(value, expected_type)
-            elif key in required:
-                raise ValueError(f"Missing required parameter: {key}")
-
-        return result
-
-    def _coerce_type(self, value: Any, target_type: Optional[str]) -> Any:
-        """Coerce value to target type"""
-        if target_type is None:
-            return value
-
-        try:
-            if target_type == "string":
-                return str(value)
-            elif target_type == "number":
-                return float(value) if isinstance(value, str) else value
-            elif target_type == "integer":
-                return int(value) if isinstance(value, (int, float, str)) else value
-            elif target_type == "boolean":
-                if isinstance(value, str):
-                    return value.lower() in ("true", "yes", "1")
-                return bool(value)
-        except (ValueError, TypeError):
-            raise ValueError(f"Cannot coerce {value} to type {target_type}")
+        return arguments
 
 
 class FrontendActionTool(Tool):
@@ -145,13 +94,29 @@ class BackendTool(Tool):
         self,
         name: str,
         description: str,
-        parameters: Dict[str, Any],
+        parameters: Any,
         read_only: bool = True,
-        execute_fn: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Awaitable[Any]]] = None,
+        execute_fn: Optional[Callable] = None,
         metadata: Optional[ToolMetadata] = None,
+        schema_model: Optional[Any] = None,
     ):
+        if schema_model is None and isinstance(parameters, type) and issubclass(parameters, BaseModel):
+            schema_model = parameters
+            if hasattr(parameters, "model_json_schema"):
+                parameters = parameters.model_json_schema()
+            else:
+                parameters = parameters.schema()
+        if schema_model is None and execute_fn:
+            try:
+                sig = inspect.signature(execute_fn)
+                p_list = list(sig.parameters.values())
+                if p_list and isinstance(p_list[0].annotation, type) and issubclass(p_list[0].annotation, BaseModel):
+                    schema_model = p_list[0].annotation
+            except Exception:
+                pass
         super().__init__(name, description, parameters, read_only, metadata)
         self.execute_fn = execute_fn or self._not_implemented
+        self.schema_model = schema_model
 
     async def execute(self, arguments: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """Execute using registered function with Pydantic coercion and sync/async support"""
@@ -447,8 +412,8 @@ STANDARD_FRONTEND_TOOLS = {
                     "description": "Logical target ID",
                 },
                 "value": {
-                    "type": ["string", "number", "boolean"],
-                    "description": "Value to set",
+                    "type": "string",
+                    "description": "Value as text",
                 },
                 "explanation": {
                     "type": "string",

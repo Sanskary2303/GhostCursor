@@ -75,8 +75,8 @@ async def test_e2e_action_planning_flow(monkeypatch):
             "revision": data["revision"],
             "kind": "actions",
             "results": [
-                {"id": str(uuid.uuid4()), "ok": True, "output": {"clicked": True}},
-                {"id": str(uuid.uuid4()), "ok": True, "output": {"clicked": True}},
+                {"id": a["id"], "ok": True, "output": {}}
+                for a in data["actions"]
             ],
         }
 

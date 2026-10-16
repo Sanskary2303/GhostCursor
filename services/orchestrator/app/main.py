@@ -6,6 +6,7 @@ Google ADK Agent Engine with Vertex AI Gemini 2.0 integration.
 
 from __future__ import annotations
 
+import copy
 import os
 import uuid
 import logging
@@ -26,7 +27,14 @@ from .models.contracts import (
     ToolCallRequest,
     ToolCallResponse,
     ProtocolVersion,
+    MAX_TURNS,
 )
+
+EXPECTED_KINDS = {
+    "awaiting_tools": {"tools", "cancel"},
+    "awaiting_actions": {"actions", "cancel"},
+    "awaiting_answer": {"answer", "cancel"},
+}
 from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore
 from .llm.vertex import VertexAIClient, MockVertexAIClient
 from .tools.frontend_actions import FRONTEND_ACTION_TOOLS
@@ -304,18 +312,25 @@ async def continue_run(
         if run_state.tenant != tenant_id or run_state.subject != subject:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        # Verify revision (optimistic locking)
-        if run_state.revision != request.revision:
-            raise HTTPException(status_code=409, detail="Revision mismatch")
-
-        # Verify event ID for replay protection
-        if request.eventId and run_state.latest_event_id == request.eventId:
-            # Check if payload matches
-            # If identical, return cached result
-            if run_state.latest_event_digest == RunStore.compute_digest(request.model_dump()):
+        digest = RunStore.compute_digest(request.model_dump())
+        if request.eventId == run_state.latest_event_id:
+            if digest == run_state.latest_event_digest:
                 return run_state.to_hosted_response()
-            else:
-                raise HTTPException(status_code=409, detail="Event ID replay with different payload")
+            raise HTTPException(status_code=409, detail="event_conflict")
+        if run_state.is_terminal:
+            if request.kind == "cancel":
+                return run_state.to_hosted_response()
+            raise HTTPException(status_code=409, detail="run_finished")
+        if request.revision != run_state.revision:
+            raise HTTPException(status_code=409, detail="stale_revision")
+        if request.kind not in EXPECTED_KINDS.get(run_state.status, set()):
+            raise HTTPException(status_code=409, detail="unexpected_kind")
+        if request.kind != "cancel" and run_state.turn_count >= MAX_TURNS:
+            raise HTTPException(status_code=409, detail="turn_limit")
+        if request.kind in ("tools", "actions"):
+            if sorted(r.id for r in (request.results or [])) != sorted(run_state.pending_ids):
+                raise HTTPException(status_code=409, detail="result_mismatch")
+        run_state = copy.deepcopy(run_state)
 
         # Process based on kind
         run_state.latest_tool_results = []
@@ -341,18 +356,13 @@ async def continue_run(
         run_state.status = response.status
         run_state.latest_reply = response.reply
         run_state.latest_event_id = request.eventId
-        run_state.latest_event_digest = RunStore.compute_digest(request.model_dump())
+        run_state.latest_event_digest = digest
         run_state.history.append({
             "revision": run_state.revision,
             "type": request.kind,
             "request": request.model_dump(),
             "response": response.model_dump(),
         })
-
-        # Check turn limit
-        if len([h for h in run_state.history if h["type"] != "initial"]) >= 12:
-            if request.kind != "cancel":
-                raise HTTPException(status_code=400, detail="Turn limit exceeded")
 
         # Save run
         await run_store.save(run_state)
@@ -411,6 +421,15 @@ async def _handle_action_results(
 ) -> HostedRunResponse:
     """Handle frontend action execution results"""
     run_state.latest_action_results = results or []
+    if any(not r.ok for r in (results or [])):
+        return HostedRunResponse(
+            protocolVersion="1",
+            runId=run_state.id,
+            revision=run_state.revision,
+            status="failed",
+            reply="Stopped because a step failed. Changes already made on the page were kept.",
+        )
+
     context_dict = (
         updated_context.model_dump()
         if hasattr(updated_context, "model_dump")

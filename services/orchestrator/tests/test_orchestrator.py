@@ -210,7 +210,8 @@ async def test_continue_with_action_results(auth_headers):
             "revision": 0,
             "kind": "actions",
             "results": [
-                {"id": str(uuid.uuid4()), "ok": True, "output": {"toggled": True}},
+                {"id": a["id"], "ok": True, "output": {}}
+                for a in data["actions"]
             ],
         }
 
@@ -429,6 +430,251 @@ async def test_actions_continuation_with_failure_returns_failed(auth_headers):
         assert cont_res.status_code == 200
         cont_data = cont_res.json()
         assert cont_data["status"] == "failed"
-        assert "Switch element disabled" in cont_data["reply"]
+        assert cont_data["reply"] == "Stopped because a step failed. Changes already made on the page were kept."
+
+
+@pytest.mark.asyncio
+async def test_replay_protection(auth_headers):
+    """Test identical event replay returns cached 200, changed replay returns 409"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        data = res.json()
+        run_id = data["runId"]
+        actions = data["actions"]
+
+        event_id = str(uuid.uuid4())
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": event_id,
+            "revision": 0,
+            "kind": "actions",
+            "results": [{"id": a["id"], "ok": True, "output": {}} for a in actions],
+        }
+
+        # First attempt -> 200
+        res1 = await client.post(f"/v1/runs/{run_id}/continue", json=continue_payload, headers=auth_headers)
+        assert res1.status_code == 200
+        body1 = res1.json()
+
+        # Identical replay -> 200 with identical body
+        res2 = await client.post(f"/v1/runs/{run_id}/continue", json=continue_payload, headers=auth_headers)
+        assert res2.status_code == 200
+        assert res2.json() == body1
+
+        # Changed replay with same eventId -> 409 event_conflict
+        changed_payload = dict(continue_payload)
+        changed_payload["context"] = {"page": "other"}
+        res3 = await client.post(f"/v1/runs/{run_id}/continue", json=changed_payload, headers=auth_headers)
+        assert res3.status_code == 409
+        assert res3.json()["error"] == "event_conflict"
+
+
+@pytest.mark.asyncio
+async def test_stale_revision_rejected(auth_headers):
+    """Continuing with a stale revision returns 409 stale_revision"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        data = res.json()
+        run_id = data["runId"]
+        actions = data["actions"]
+
+        # Stale revision (e.g. 5 instead of 0)
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": str(uuid.uuid4()),
+            "revision": 5,
+            "kind": "actions",
+            "results": [{"id": a["id"], "ok": True, "output": {}} for a in actions],
+        }
+        res = await client.post(f"/v1/runs/{run_id}/continue", json=continue_payload, headers=auth_headers)
+        assert res.status_code == 409
+        assert res.json()["error"] == "stale_revision"
+
+
+@pytest.mark.asyncio
+async def test_unexpected_kind_rejected(auth_headers):
+    """Sending 'tools' to an awaiting_answer run returns 409 unexpected_kind"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "checkout",
+        "context": {"page": "cart", "values": {}, "availableTargets": []},
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        data = res.json()
+        assert data["status"] == "awaiting_answer"
+        run_id = data["runId"]
+
+        # Send tools instead of answer
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": str(uuid.uuid4()),
+            "revision": 0,
+            "kind": "tools",
+            "results": [],
+        }
+        res = await client.post(f"/v1/runs/{run_id}/continue", json=continue_payload, headers=auth_headers)
+        assert res.status_code == 409
+        assert res.json()["error"] == "unexpected_kind"
+
+
+@pytest.mark.asyncio
+async def test_wrong_result_ids_rejected(auth_headers):
+    """Sending results with mismatched IDs returns 409 result_mismatch"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        data = res.json()
+        run_id = data["runId"]
+
+        # Send random result ID
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": str(uuid.uuid4()),
+            "revision": 0,
+            "kind": "actions",
+            "results": [{"id": str(uuid.uuid4()), "ok": True, "output": {}}],
+        }
+        res = await client.post(f"/v1/runs/{run_id}/continue", json=continue_payload, headers=auth_headers)
+        assert res.status_code == 409
+        assert res.json()["error"] == "result_mismatch"
+
+
+@pytest.mark.asyncio
+async def test_terminal_run_continuation_and_cancellation(auth_headers):
+    """Continuing a completed run returns 409 run_finished, while cancel returns 200"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        data = res.json()
+        run_id = data["runId"]
+        actions = data["actions"]
+
+        # Complete the run
+        cont_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 0,
+                "kind": "actions",
+                "results": [{"id": a["id"], "ok": True, "output": {}} for a in actions],
+            },
+            headers=auth_headers,
+        )
+        assert cont_res.status_code == 200
+        assert cont_res.json()["status"] == "completed"
+
+        # Continuing completed run -> 409 run_finished
+        next_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 1,
+                "kind": "actions",
+                "results": [],
+            },
+            headers=auth_headers,
+        )
+        assert next_res.status_code == 409
+        assert next_res.json()["error"] == "run_finished"
+
+        # Cancel on completed run -> 200 returning cached response
+        cancel_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 1,
+                "kind": "cancel",
+            },
+            headers=auth_headers,
+        )
+        assert cancel_res.status_code == 200
+        assert cancel_res.json()["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_turn_limit_enforcement(auth_headers):
+    """Turn limit enforces max turns for continue but permits cancel"""
+    from services.orchestrator.app.main import run_store
+
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "checkout",
+        "context": {"page": "cart", "values": {}, "availableTargets": []},
+    }
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        data = res.json()
+        assert data["status"] == "awaiting_answer"
+        run_id = data["runId"]
+
+        # Append 12 history turns directly to simulate reaching limit
+        run_state = await run_store.get(run_id)
+        for i in range(12):
+            run_state.history.append({"type": "answer", "revision": i + 1})
+        await run_store.save(run_state)
+
+        # Continuing with answer -> 409 turn_limit
+        res_limit = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 0,
+                "kind": "answer",
+                "answer": "123 Main St",
+            },
+            headers=auth_headers,
+        )
+        assert res_limit.status_code == 409
+        assert res_limit.json()["error"] == "turn_limit"
+
+        # Cancel -> 200
+        res_cancel = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 0,
+                "kind": "cancel",
+            },
+            headers=auth_headers,
+        )
+        assert res_cancel.status_code == 200
+        assert res_cancel.json()["status"] == "cancelled"
+
 
 

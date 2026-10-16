@@ -1018,9 +1018,8 @@ async def test_nan_value_in_context_values_rejected_422(auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_undeclared_tool_name_fails_run(monkeypatch, auth_headers):
+async def test_undeclared_tool_name_fails_run(app, monkeypatch, auth_headers):
     """Model calling an undeclared tool causes run to fail with plan failure reply"""
-    from services.orchestrator.app import main as main_module
     from services.orchestrator.app.models.contracts import ToolCallRequest, HostedRunResponse
 
     async def mock_generate(*args, **kwargs):
@@ -1033,7 +1032,7 @@ async def test_undeclared_tool_name_fails_run(monkeypatch, auth_headers):
             toolCalls=[ToolCallRequest(id=str(uuid.uuid4()), tool="unauthorized_tool", parameters={})],
         )
 
-    monkeypatch.setattr(main_module.vertex_client, "generate_content", mock_generate)
+    monkeypatch.setattr(app.state.provider, "generate_content", mock_generate)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1261,7 +1260,6 @@ async def test_continue_run_busy_returns_409(app, auth_headers, monkeypatch):
         yield None, None
 
     monkeypatch.setattr(app.state.store, "locked", fake_locked)
-    monkeypatch.setattr(main_mod.run_store, "locked", fake_locked)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -1282,14 +1280,11 @@ async def test_continue_run_busy_returns_409(app, auth_headers, monkeypatch):
 @pytest.mark.asyncio
 async def test_create_run_failure_marked_as_failed_and_retry_returns_200(app, auth_headers, monkeypatch):
     """Unexpected exception in create_run marks run as failed so retry returns 200 failed not 409 in_progress"""
-    import services.orchestrator.app.main as main_mod
-
     class FailingVertexClient:
         async def generate_content(self, *args, **kwargs):
             raise RuntimeError("Unexpected failure during model generation")
 
     monkeypatch.setattr(app.state, "provider", FailingVertexClient())
-    monkeypatch.setattr(main_mod, "vertex_client", FailingVertexClient())
 
     payload = {
         "protocolVersion": "1",
@@ -1311,6 +1306,42 @@ async def test_create_run_failure_marked_as_failed_and_retry_returns_200(app, au
         data = res_retry.json()
         assert data["status"] == "failed"
         assert data["reply"] == "Something went wrong. Please try again."
+
+
+def test_create_app_uses_provided_store_and_factory():
+    """T-3: create_app(store=custom, provider=..., tenant_keys=...) actually uses what it is given"""
+    from fastapi.testclient import TestClient
+    from services.orchestrator.app.main import create_app
+    from services.orchestrator.app.storage.run_store import InMemoryRunStore
+    from services.orchestrator.app.llm.vertex import MockVertexAIClient
+
+    custom = InMemoryRunStore()
+    test_key = "test-key-factory-check-0123456789abcdef"
+    app_custom = create_app(
+        store=custom,
+        provider=MockVertexAIClient(),
+        tenant_keys={test_key: "t"},
+    )
+
+    client = TestClient(app_custom)
+    res = client.post(
+        "/v1/runs",
+        json={
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Verify custom store factory",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        },
+        headers={
+            "Authorization": f"Bearer {test_key}",
+            "X-Ghost-Subject": "user_factory_1",
+            "Content-Type": "application/json",
+        },
+    )
+    assert res.status_code == 200
+    run_id = res.json()["runId"]
+    assert run_id in custom._runs
+
 
 
 

@@ -149,46 +149,15 @@ rate_limit_store = RATE_LIMIT_STORE
 
 
 def _get_store(request: Request) -> RunStore:
-    global run_store
-    if getattr(request.app.state, "store", None) is not None:
-        if (
-            run_store is not None
-            and getattr(request.app.state, "_initial_store", None) is not run_store
-            and request.app.state.store is not run_store
-        ):
-            return run_store
-        return request.app.state.store
-    if run_store is not None:
-        return run_store
-    raise RuntimeError("RunStore not initialized")
+    return request.app.state.store
 
 
 def _get_provider(request: Request) -> BaseVertexClient:
-    global vertex_client
-    if getattr(request.app.state, "provider", None) is not None:
-        if (
-            vertex_client is not None
-            and getattr(request.app.state, "_initial_provider", None) is not vertex_client
-            and request.app.state.provider is not vertex_client
-        ):
-            return vertex_client
-        return request.app.state.provider
-    if vertex_client is not None:
-        return vertex_client
-    raise RuntimeError("Vertex client not initialized")
+    return request.app.state.provider
 
 
 def _get_tenant_keys(request: Request) -> Dict[str, str]:
-    global TENANT_KEYS
-    if getattr(request.app.state, "tenant_keys", None) is not None:
-        if (
-            TENANT_KEYS is not None
-            and getattr(request.app.state, "_initial_tenant_keys", None) is not TENANT_KEYS
-            and request.app.state.tenant_keys is not TENANT_KEYS
-        ):
-            return TENANT_KEYS
-        return request.app.state.tenant_keys
-    return TENANT_KEYS
+    return request.app.state.tenant_keys
 
 
 router = APIRouter()
@@ -351,7 +320,6 @@ async def create_run(
     reject_origin_requests(http_request)
 
     tenant_id, subject = tenant_subject
-    init_globals()
     store = _get_store(http_request)
     provider = _get_provider(http_request)
 
@@ -452,8 +420,7 @@ async def create_run(
                 run_state.revision = 0
                 run_state.status = "failed"
                 run_state.latest_reply = "Something went wrong. Please try again."
-                active_store = store or run_store
-                await active_store.save(run_state)
+                await store.save(run_state)
             except Exception:
                 logger.exception("Could not mark run %s as failed", run_state.id if run_state else "unknown")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -472,7 +439,6 @@ async def continue_run(
     reject_origin_requests(http_request)
 
     tenant_id, subject = tenant_subject
-    init_globals()
     store = _get_store(http_request)
     provider = _get_provider(http_request)
 
@@ -897,11 +863,8 @@ def create_app(
         lifespan=lifespan,
     )
     app_instance.state.store = store
-    app_instance.state._initial_store = store
     app_instance.state.provider = provider
-    app_instance.state._initial_provider = provider
     app_instance.state.tenant_keys = tenant_keys
-    app_instance.state._initial_tenant_keys = tenant_keys
 
     app_instance.middleware("http")(security_and_limits_middleware)
     app_instance.include_router(router)

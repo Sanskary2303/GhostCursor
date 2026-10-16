@@ -9,8 +9,8 @@ import uuid
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from services.orchestrator.app.main import app
-import services.orchestrator.app.main as main_mod
+from services.orchestrator.app.main import create_app
+from services.orchestrator.app.llm.vertex import MockVertexAIClient
 from services.orchestrator.app.migrate import run_migrations
 from services.orchestrator.app.models.run import RunState
 from services.orchestrator.app.storage.run_store import PostgreSQLRunStore
@@ -40,11 +40,9 @@ async def get_test_pg_store():
 
 
 @pytest.mark.asyncio
-async def test_pg_store_lifecycle_and_migration(auth_headers, monkeypatch):
+async def test_pg_store_lifecycle_and_migration(auth_headers):
     """Test explicit migration, atomic pending create, locked context manager, and orchestrator integration"""
     async with get_test_pg_store() as pg_store:
-        monkeypatch.setattr(main_mod, "run_store", pg_store)
-
         tenant = "shophive_demo"
         subject = "user_demo_123"
         req_id = str(uuid.uuid4())
@@ -84,7 +82,12 @@ async def test_pg_store_lifecycle_and_migration(auth_headers, monkeypatch):
         assert reloaded.status == "awaiting_actions"
 
         # 3. Test through HTTP API
-        transport = ASGITransport(app=app)
+        test_app = create_app(
+            store=pg_store,
+            provider=MockVertexAIClient(),
+            tenant_keys={"test-key-shophive-demo-0123456789abcdef": "shophive_demo"},
+        )
+        transport = ASGITransport(app=test_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Create run
             create_payload = {
@@ -122,12 +125,15 @@ async def test_pg_store_lifecycle_and_migration(auth_headers, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pg_store_concurrent_continues_conflict(auth_headers, monkeypatch):
+async def test_pg_store_concurrent_continues_conflict(auth_headers):
     """Two concurrent continues at the same revision result in one 200 and one 409 stale_revision"""
     async with get_test_pg_store() as pg_store:
-        monkeypatch.setattr(main_mod, "run_store", pg_store)
-
-        transport = ASGITransport(app=app)
+        test_app = create_app(
+            store=pg_store,
+            provider=MockVertexAIClient(),
+            tenant_keys={"test-key-shophive-demo-0123456789abcdef": "shophive_demo"},
+        )
+        transport = ASGITransport(app=test_app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             # 1. Create run
             create_payload = {

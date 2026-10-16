@@ -114,7 +114,7 @@ async def test_main_handles_provider_error_safely(auth_headers, monkeypatch):
         async def generate_content(self, *args, **kwargs):
             raise ProviderError("Connection refused by Vertex AI")
 
-    monkeypatch.setattr(main_mod, "vertex_client", FailingProvider())
+    monkeypatch.setattr(app.state, "provider", FailingProvider())
 
     payload = {
         "protocolVersion": "1",
@@ -205,7 +205,6 @@ async def test_ask_clarification_answer_transcript_format(app, auth_headers, mon
 
     client_instance = ClarificationModelClient()
     monkeypatch.setattr(app.state, "provider", client_instance)
-    monkeypatch.setattr(main_mod, "vertex_client", client_instance)
 
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:

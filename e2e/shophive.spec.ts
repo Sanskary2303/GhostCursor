@@ -1,4 +1,4 @@
-import { test, expect, Page } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 const chat = (page: Page) => page.locator('.ghost-chat-panel');
 async function ask(page: Page, text: string) {

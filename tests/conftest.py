@@ -47,8 +47,6 @@ def app(store, provider, tenant_keys):
 @pytest.fixture(autouse=True)
 def fresh_app(app, store, provider, monkeypatch):
     monkeypatch.setattr(main_mod, "app", app)
-    monkeypatch.setattr(main_mod, "run_store", store)
-    monkeypatch.setattr(main_mod, "vertex_client", provider)
     try:
         import tests.test_e2e_flow as test_e2e
         monkeypatch.setattr(test_e2e, "orch_app", app)

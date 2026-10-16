@@ -19,6 +19,10 @@ from .vertex import BaseVertexClient, ProviderError, parse_model_response
 logger = logging.getLogger(__name__)
 
 
+def _is_clean_start(turn: Dict[str, Any]) -> bool:
+    return turn.get("role") == "user" and not any("function_response" in p for p in turn.get("parts", []))
+
+
 def prune_transcript(transcript: List[Dict[str, Any]], max_parts: int = 40) -> List[Dict[str, Any]]:
     """
     Keep at most the last max_parts parts across turns,
@@ -30,7 +34,7 @@ def prune_transcript(transcript: List[Dict[str, Any]], max_parts: int = 40) -> L
             break
         transcript.pop(0)
 
-    while transcript and transcript[0].get("role") != "user":
+    while transcript and not _is_clean_start(transcript[0]):
         transcript.pop(0)
 
     return transcript

@@ -1248,6 +1248,71 @@ async def test_tool_with_list_type_rejected(auth_headers):
         assert res.status_code == 422
 
 
+@pytest.mark.asyncio
+async def test_continue_run_busy_returns_409(app, auth_headers, monkeypatch):
+    """When row lock times out (raising RunBusyError), continue returns 409 busy"""
+    from contextlib import asynccontextmanager
+    from services.orchestrator.app.storage.run_store import RunBusyError
+    import services.orchestrator.app.main as main_mod
+
+    @asynccontextmanager
+    async def fake_locked(*args, **kwargs):
+        raise RunBusyError("Row lock timeout")
+        yield None, None
+
+    monkeypatch.setattr(app.state.store, "locked", fake_locked)
+    monkeypatch.setattr(main_mod.run_store, "locked", fake_locked)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post(
+            f"/v1/runs/{uuid.uuid4()}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 0,
+                "kind": "cancel",
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 409
+        assert res.json() == {"error": "busy"}
+
+
+@pytest.mark.asyncio
+async def test_create_run_failure_marked_as_failed_and_retry_returns_200(app, auth_headers, monkeypatch):
+    """Unexpected exception in create_run marks run as failed so retry returns 200 failed not 409 in_progress"""
+    import services.orchestrator.app.main as main_mod
+
+    class FailingVertexClient:
+        async def generate_content(self, *args, **kwargs):
+            raise RuntimeError("Unexpected failure during model generation")
+
+    monkeypatch.setattr(app.state, "provider", FailingVertexClient())
+    monkeypatch.setattr(main_mod, "vertex_client", FailingVertexClient())
+
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "checkout",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # First call fails unexpectedly -> 500
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 500
+
+        # Retry with the same requestId should NOT return 409 in_progress;
+        # it should return 200 with status: "failed"
+        res_retry = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res_retry.status_code == 200
+        data = res_retry.json()
+        assert data["status"] == "failed"
+        assert data["reply"] == "Something went wrong. Please try again."
+
+
 
 
 

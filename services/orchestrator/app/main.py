@@ -43,7 +43,7 @@ EXPECTED_KINDS = {
     "awaiting_answer": {"answer", "cancel"},
 }
 from .tools.frontend_actions import FRONTEND_ACTION_TOOLS, FRONTEND_TOOL_NAMES, is_frontend_tool, normalize_schema
-from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore
+from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore, RunBusyError
 from .llm.vertex import BaseVertexClient, MockVertexAIClient, ProviderError
 from .llm.gemini import GeminiProvider, prune_transcript
 from .tools.loopback import GatewayLoopbackHandler
@@ -356,6 +356,9 @@ async def create_run(
     provider = _get_provider(http_request)
 
     try:
+        inserted_id = None
+        run_state = None
+
         # Validate and normalize customer tools
         for t in request.tools:
             if is_frontend_tool(t.name):
@@ -444,6 +447,15 @@ async def create_run(
         raise
     except Exception as e:
         logger.error(f"Error creating run: {e}")
+        if inserted_id:
+            try:
+                run_state.revision = 0
+                run_state.status = "failed"
+                run_state.latest_reply = "Something went wrong. Please try again."
+                active_store = store or run_store
+                await active_store.save(run_state)
+            except Exception:
+                logger.exception("Could not mark run %s as failed", run_state.id if run_state else "unknown")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -536,6 +548,8 @@ async def continue_run(
 
     except HTTPException:
         raise
+    except RunBusyError:
+        raise HTTPException(status_code=409, detail="busy")
     except Exception as e:
         logger.error(f"Error continuing run: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -769,10 +783,15 @@ async def _handle_user_answer(
 ) -> HostedRunResponse:
     """Handle user answer to clarification question"""
     if answer:
-        run_state.transcript.append({
-            "role": "user",
-            "parts": [{"text": answer}],
-        })
+        last = run_state.transcript[-1] if run_state.transcript else None
+        asked = bool(last and last.get("role") == "model" and any(
+            p.get("function_call", {}).get("name") == "ask_clarification" for p in last.get("parts", [])
+        ))
+        part = (
+            {"function_response": {"name": "ask_clarification", "response": {"answer": answer}}}
+            if asked else {"text": answer}
+        )
+        run_state.transcript.append({"role": "user", "parts": [part]})
         prune_transcript(run_state.transcript, max_parts=40)
 
     context_dict = (

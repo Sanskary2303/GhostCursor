@@ -143,3 +143,114 @@ def test_prune_transcript_caps_at_max_parts():
     assert total_parts <= 40
     assert pruned[0]["role"] == "user"
 
+
+def test_prune_transcript_drops_leading_function_response():
+    """A transcript whose first kept turn would be a function-response turn starts with a plain user text turn"""
+    transcript = [
+        {"role": "user", "parts": [{"text": "First user message"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "ask_clarification", "args": {}}}]},
+        {"role": "user", "parts": [{"function_response": {"name": "ask_clarification", "response": {"answer": "A"}}}]},
+        {"role": "model", "parts": [{"text": "Proceeding"}]},
+        {"role": "user", "parts": [{"text": "Clean user message"}]},
+    ]
+    pruned = prune_transcript(transcript, max_parts=3)
+    assert len(pruned) == 1
+    assert pruned[0]["parts"] == [{"text": "Clean user message"}]
+
+
+@pytest.mark.asyncio
+async def test_ask_clarification_answer_transcript_format(app, auth_headers, monkeypatch):
+    """Continuing with kind=answer after ask_clarification sends function_response in transcript"""
+    from httpx import AsyncClient, ASGITransport
+    from services.orchestrator.app.models.contracts import HostedRunResponse
+    import services.orchestrator.app.main as main_mod
+
+    recorded_transcripts = []
+
+    class ClarificationModelClient:
+        async def generate_content(self, agent, user_message, run_context, transcript):
+            recorded_transcripts.append([dict(t) for t in transcript])
+            if not any(t.get("role") == "model" for t in transcript):
+                transcript.append({
+                    "role": "model",
+                    "parts": [{
+                        "function_call": {
+                            "name": "ask_clarification",
+                            "args": {
+                                "question": "Which address?",
+                                "options": ["Home", "Work"],
+                            },
+                        }
+                    }],
+                })
+                return HostedRunResponse(
+                    protocolVersion="1",
+                    runId=run_context.get("run_id", "run-1"),
+                    revision=run_context.get("revision", 0),
+                    status="awaiting_answer",
+                    reply="Which address?",
+                    questions=[{
+                        "question": "Which address?",
+                        "options": ["Home", "Work"],
+                    }],
+                )
+            else:
+                return HostedRunResponse(
+                    protocolVersion="1",
+                    runId=run_context.get("run_id", "run-1"),
+                    revision=run_context.get("revision", 1),
+                    status="completed",
+                    reply="Thanks for the answer!",
+                )
+
+    client_instance = ClarificationModelClient()
+    monkeypatch.setattr(app.state, "provider", client_instance)
+    monkeypatch.setattr(main_mod, "vertex_client", client_instance)
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        req_id = str(uuid.uuid4())
+        start_res = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": req_id,
+                "message": "Checkout my cart",
+                "context": {"page": "cart", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert start_res.status_code == 200
+        start_data = start_res.json()
+        assert start_data["status"] == "awaiting_answer"
+        run_id = start_data["runId"]
+
+        continue_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": 0,
+                "kind": "answer",
+                "answer": "Home",
+            },
+            headers=auth_headers,
+        )
+        assert continue_res.status_code == 200
+        continue_data = continue_res.json()
+        assert continue_data["status"] == "completed"
+
+        assert len(recorded_transcripts) >= 2
+        second_turn_transcript = recorded_transcripts[-1]
+        user_turns = [t for t in second_turn_transcript if t.get("role") == "user"]
+        assert len(user_turns) >= 2
+        last_user_turn = user_turns[-1]
+        assert last_user_turn["parts"] == [
+            {
+                "function_response": {
+                    "name": "ask_clarification",
+                    "response": {"answer": "Home"},
+                }
+            }
+        ]
+

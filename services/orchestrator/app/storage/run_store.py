@@ -17,6 +17,10 @@ from ..models.run import RunState, RunStore
 logger = logging.getLogger(__name__)
 
 
+class RunBusyError(Exception):
+    pass
+
+
 class InMemoryRunStore(RunStore):
     """
     In-memory run store for testing and development.
@@ -177,16 +181,20 @@ class PostgreSQLRunStore(RunStore):
         async with self._pool.acquire(timeout=self.timeout) as conn:
             async with conn.transaction():
                 await conn.execute(f"SET LOCAL lock_timeout = '{self.lock_timeout}'")
-                row = await conn.fetchrow(
-                    """
-                    SELECT data FROM ghost_runs
-                    WHERE id = $1 AND tenant = $2 AND subject = $3
-                    FOR UPDATE
-                    """,
-                    run_uuid,
-                    tenant,
-                    subject,
-                )
+                import asyncpg
+                try:
+                    row = await conn.fetchrow(
+                        """
+                        SELECT data FROM ghost_runs
+                        WHERE id = $1 AND tenant = $2 AND subject = $3
+                        FOR UPDATE
+                        """,
+                        run_uuid,
+                        tenant,
+                        subject,
+                    )
+                except asyncpg.exceptions.LockNotAvailableError as e:
+                    raise RunBusyError() from e
 
                 run_state: Optional[RunState] = None
                 if row:

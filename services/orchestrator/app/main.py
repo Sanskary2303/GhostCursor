@@ -6,18 +6,19 @@ Google ADK Agent Engine with Vertex AI Gemini 2.0 integration.
 
 from __future__ import annotations
 
+import collections
 import copy
 import hmac
 import json
 import logging
 import os
 import re
+import time
 import uuid
 from contextlib import asynccontextmanager
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Header
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -145,14 +146,80 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS - restrict in production
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # Restrict in production
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
-)
+# Note: In-memory rate limiting is per-instance, not distributed across multiple workers/nodes.
+RATE_LIMIT_STORE: Dict[str, collections.deque] = {}
+rate_limit_store = RATE_LIMIT_STORE
+
+
+@app.middleware("http")
+async def security_and_limits_middleware(request: Request, call_next):
+    if request.method == "POST":
+        content_length_header = request.headers.get("content-length")
+        if not content_length_header:
+            return JSONResponse(
+                status_code=411,
+                content={"error": "length_required"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        try:
+            content_length = int(content_length_header)
+        except ValueError:
+            return JSONResponse(
+                status_code=411,
+                content={"error": "length_required"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        if content_length > 65536:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "too_large"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        body = await request.body()
+        if len(body) > 65536:
+            return JSONResponse(
+                status_code=413,
+                content={"error": "too_large"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        # Rate limiting: key is request.client.host (fallback to 127.0.0.1 if None)
+        client_host = request.client.host if request.client else "127.0.0.1"
+        now = time.time()
+        limit = int(os.getenv("GHOST_RATE_LIMIT_PER_MIN", "60"))
+        dq = RATE_LIMIT_STORE.setdefault(client_host, collections.deque())
+        while dq and dq[0] <= now - 60.0:
+            dq.popleft()
+
+        if len(dq) >= limit:
+            return JSONResponse(
+                status_code=429,
+                content={"error": "rate_limited"},
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+        dq.append(now)
+
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return response
 
 
 # ============================================================================
@@ -260,6 +327,8 @@ async def create_run(
         # Check for deduplication
         existing_run = await run_store.get_by_request_id(tenant_id, subject, request.requestId)
         if existing_run:
+            if existing_run.is_expired:
+                raise HTTPException(status_code=410, detail="run_expired")
             # Verify payload matches
             if existing_run.start_payload_digest != RunStore.compute_digest(request.model_dump()):
                 raise HTTPException(status_code=409, detail="Payload mismatch for existing requestId")
@@ -346,6 +415,9 @@ async def continue_run(
         # Verify tenant and subject
         if run_state.tenant != tenant_id or run_state.subject != subject:
             raise HTTPException(status_code=404, detail="Run not found")
+
+        if run_state.is_expired:
+            raise HTTPException(status_code=410, detail="run_expired")
 
         digest = RunStore.compute_digest(request.model_dump())
         if request.eventId == run_state.latest_event_id:

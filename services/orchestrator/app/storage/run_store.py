@@ -30,10 +30,7 @@ class InMemoryRunStore(RunStore):
         self._index_by_request[key] = run.id
 
     async def get(self, run_id: str) -> Optional[RunState]:
-        run = self._runs.get(run_id)
-        if run and run.is_expired:
-            return None  # Treat expired runs as 410 Gone
-        return run
+        return self._runs.get(run_id)
 
     async def get_by_request_id(self, tenant: str, subject: str, request_id: str) -> Optional[RunState]:
         key = f"{tenant}:{subject}:{request_id}"
@@ -132,7 +129,7 @@ class PostgreSQLRunStore(RunStore):
             row = await conn.fetchrow(
                 """
                 SELECT data FROM ghost_runs
-                WHERE id = $1 AND expires_at > NOW()
+                WHERE id = $1
                 FOR UPDATE NOWAIT
                 """,
                 run_id,
@@ -153,7 +150,6 @@ class PostgreSQLRunStore(RunStore):
                 """
                 SELECT data FROM ghost_runs
                 WHERE tenant = $1 AND subject = $2 AND request_id = $3
-                AND expires_at > NOW()
                 """,
                 tenant,
                 subject,

@@ -38,6 +38,7 @@ KEY="$("$VENV_PYTHON" -c 'import secrets; print(secrets.token_hex(32))')"
 export GHOST_CURSOR_API_KEY="$KEY"
 export GHOST_TENANT_KEYS="{\"$KEY\": \"shophive_demo\"}"
 export GHOST_PROVIDER=mock GHOST_STORE=memory
+export GHOST_RATE_LIMIT_PER_MIN="${GHOST_RATE_LIMIT_PER_MIN:-100000}"
 export GHOST_CURSOR_SERVICE_URL="${GHOST_CURSOR_SERVICE_URL:-http://127.0.0.1:8080}"
 export PYTHONPATH="$SCRIPT_DIR:$SCRIPT_DIR/packages/sdk-server-python:$SCRIPT_DIR/demo/shophive/backend"
 

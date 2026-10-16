@@ -11,6 +11,7 @@ const sharedEnv = {
   GHOST_TENANT_KEYS: JSON.stringify({ [testKey]: 'shophive_demo' }),
   GHOST_PROVIDER: 'mock',
   GHOST_STORE: 'memory',
+  GHOST_RATE_LIMIT_PER_MIN: '100000',
 };
 
 export default defineConfig({

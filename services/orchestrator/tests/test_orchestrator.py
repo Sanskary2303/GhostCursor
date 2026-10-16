@@ -2,6 +2,7 @@
 Integration and Unit tests for Ghost Cursor Hosted Orchestrator
 """
 
+import json
 import os
 import uuid
 import pytest
@@ -795,6 +796,178 @@ def test_orchestrator_startup_without_env_fails():
     )
     assert res.returncode != 0
     assert "GHOST_TENANT_KEYS is required" in res.stderr
+
+
+@pytest.mark.asyncio
+async def test_body_too_large_rejected(auth_headers):
+    """A 70 KB body is rejected with 413 and too_large error"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        large_payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "x" * 70000,
+            "brain": "",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }
+        res = await client.post("/v1/runs", json=large_payload, headers=auth_headers)
+        assert res.status_code == 413
+        assert res.json() == {"error": "too_large"}
+        assert res.headers.get("Cache-Control") == "no-store"
+        assert res.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_rate_limiting(monkeypatch, auth_headers):
+    """With GHOST_RATE_LIMIT_PER_MIN=3, the 4th request returns 429 rate_limited"""
+    from services.orchestrator.app.main import RATE_LIMIT_STORE
+    RATE_LIMIT_STORE.clear()
+    monkeypatch.setenv("GHOST_RATE_LIMIT_PER_MIN", "3")
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "test",
+            "brain": "",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }
+        for _ in range(3):
+            p = dict(payload, requestId=str(uuid.uuid4()))
+            res = await client.post("/v1/runs", json=p, headers=auth_headers)
+            assert res.status_code == 200
+
+        # 4th request -> 429
+        p = dict(payload, requestId=str(uuid.uuid4()))
+        res = await client.post("/v1/runs", json=p, headers=auth_headers)
+        assert res.status_code == 429
+        assert res.json() == {"error": "rate_limited"}
+        assert res.headers.get("Cache-Control") == "no-store"
+        assert res.headers.get("X-Content-Type-Options") == "nosniff"
+
+    RATE_LIMIT_STORE.clear()
+
+
+@pytest.mark.asyncio
+async def test_security_headers_present_on_200_response():
+    """A 200 response has both Cache-Control and X-Content-Type-Options headers"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/health")
+        assert res.status_code == 200
+        assert res.headers.get("Cache-Control") == "no-store"
+        assert res.headers.get("X-Content-Type-Options") == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_expired_run_returns_410(auth_headers):
+    """A run whose expires_at is set in the past returns 410 run_expired"""
+    from datetime import datetime, timezone, timedelta
+    from services.orchestrator.app.main import run_store
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        req_id = str(uuid.uuid4())
+        res = await client.post(
+            "/v1/runs",
+            json={
+                "command": "start",
+                "protocolVersion": "1",
+                "requestId": req_id,
+                "message": "Add to cart",
+                "brain": "",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res.status_code == 200
+        run_id = res.json()["runId"]
+
+        # Set expires_at in the past
+        stored_run = await run_store.get(run_id)
+        assert stored_run is not None
+        stored_run.expires_at = datetime.now(timezone.utc) - timedelta(seconds=10)
+        await run_store.save(stored_run)
+
+        # 1. Continue expired run -> 410
+        continue_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": stored_run.revision,
+                "kind": "cancel",
+            },
+            headers=auth_headers,
+        )
+        assert continue_res.status_code == 410
+        assert continue_res.json()["error"] == "run_expired"
+
+        # 2. Deduplicate create with expired run -> 410
+        dedup_res = await client.post(
+            "/v1/runs",
+            json={
+                "command": "start",
+                "protocolVersion": "1",
+                "requestId": req_id,
+                "message": "Add to cart",
+                "brain": "",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert dedup_res.status_code == 410
+        assert dedup_res.json()["error"] == "run_expired"
+
+
+@pytest.mark.asyncio
+async def test_post_missing_content_length_returns_411(auth_headers):
+    """POST request without content-length header returns 411 length_required"""
+    # Use ASGI directly to send POST without content-length
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/v1/runs",
+        "raw_path": b"/v1/runs",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"test"),
+            (b"authorization", auth_headers["Authorization"].encode()),
+            (b"x-ghost-subject", auth_headers["X-Ghost-Subject"].encode()),
+        ],
+        "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 80),
+        "scheme": "http",
+        "http_version": "1.1",
+    }
+
+    response_status = None
+    response_headers = []
+    response_body = []
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        nonlocal response_status, response_headers, response_body
+        if message["type"] == "http.response.start":
+            response_status = message["status"]
+            response_headers = message.get("headers", [])
+        elif message["type"] == "http.response.body":
+            response_body.append(message.get("body", b""))
+
+    await app(scope, receive, send)
+
+    assert response_status == 411
+    body_json = json.loads(b"".join(response_body).decode())
+    assert body_json == {"error": "length_required"}
+    header_dict = dict(response_headers)
+    assert header_dict.get(b"cache-control") == b"no-store"
+    assert header_dict.get(b"x-content-type-options") == b"nosniff"
+
 
 
 

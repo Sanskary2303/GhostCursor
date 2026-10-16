@@ -10,4 +10,4 @@ os.environ.setdefault(
     "GHOST_CURSOR_API_KEY",
     "test-key-shophive-demo-0123456789abcdef",
 )
-
+os.environ.setdefault("GHOST_RATE_LIMIT_PER_MIN", "100000")

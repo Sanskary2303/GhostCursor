@@ -185,6 +185,7 @@ export function Checkout() {
                   <label className="block text-sm font-medium mb-2">ZIP Code</label>
                   <input
                     data-ghost-id="checkout.zip"
+                    data-ghost-observe
                     type="text"
                     name="zip"
                     value={formData.zip}
@@ -206,9 +207,9 @@ export function Checkout() {
               <div>
                 <label className="block text-sm font-medium mb-2">Card Number</label>
                 <input
-                  data-ghost-id="checkout.card_number"
                   type="text"
                   name="cardNumber"
+                  autoComplete="cc-number"
                   value={formData.cardNumber}
                   onChange={handleChange}
                   required
@@ -221,9 +222,9 @@ export function Checkout() {
                 <div>
                   <label className="block text-sm font-medium mb-2">Expiry Date</label>
                   <input
-                    data-ghost-id="checkout.expiry"
                     type="text"
                     name="expiry"
+                    autoComplete="cc-exp"
                     value={formData.expiry}
                     onChange={handleChange}
                     required
@@ -235,9 +236,9 @@ export function Checkout() {
                 <div>
                   <label className="block text-sm font-medium mb-2">CVV</label>
                   <input
-                    data-ghost-id="checkout.cvv"
                     type="text"
                     name="cvv"
+                    autoComplete="cc-csc"
                     value={formData.cvv}
                     onChange={handleChange}
                     required

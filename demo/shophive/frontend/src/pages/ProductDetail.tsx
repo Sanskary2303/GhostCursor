@@ -80,10 +80,10 @@ export function ProductDetail() {
         {/* Product Info */}
         <div className="space-y-6">
           <div>
-            <h1 data-ghost-id="product.title" className="text-3xl font-bold mb-2">
+            <h1 data-ghost-id="product.title" data-ghost-observe className="text-3xl font-bold mb-2">
               {product.name}
             </h1>
-            <p data-ghost-id="product.price" className="text-3xl font-bold text-blue-600">
+            <p data-ghost-id="product.price" data-ghost-observe className="text-3xl font-bold text-blue-600">
               ${product.price}
             </p>
           </div>

@@ -95,4 +95,39 @@ test('unauthenticated POST to /api/ghost-cursor returns 401', async ({ playwrigh
   expect(res.status()).toBe(401);
 });
 
+test('typing card number on checkout does not leak to context.values or targets', async ({ page }) => {
+  const requests: any[] = [];
+  page.on('request', r => {
+    if (r.method() === 'POST' && r.url().endsWith('/api/ghost-cursor')) {
+      try {
+        requests.push(r.postDataJSON());
+      } catch {}
+    }
+  });
+
+  await page.goto('/checkout');
+  await page.locator('input[name="cardNumber"]').fill('4111222233334444');
+  await page.locator('input[name="expiry"]').fill('12/28');
+  await page.locator('input[name="cvv"]').fill('123');
+
+  await ask(page, 'Help with checkout');
+  await expect(chat(page)).toBeVisible({ timeout: 20_000 });
+
+  expect(requests.length).toBeGreaterThan(0);
+  for (const req of requests) {
+    const raw = JSON.stringify(req);
+    expect(raw).not.toContain('4111222233334444');
+    expect(raw).not.toContain('checkout.card_number');
+    expect(raw).not.toContain('checkout.cvv');
+
+    const availableTargets = req.context?.availableTargets || [];
+    for (const target of availableTargets) {
+      expect(target).not.toContain('cardNumber');
+      expect(target).not.toContain('card_number');
+      expect(target).not.toContain('cvv');
+    }
+  }
+});
+
+
 

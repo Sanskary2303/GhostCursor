@@ -18,21 +18,7 @@ const DEFAULT_OPTIONS: Required<ContextProviderOptions> = {
   pageSelector: () => window.location.pathname,
   valueSelectors: {},
   targetSelectors: [
-    'button',
-    'a[href]',
-    'input:not([type="hidden"]):not([type="password"]):not([type="file"])',
-    'select',
-    'textarea',
-    '[role="button"]',
-    '[role="link"]',
-    '[role="checkbox"]',
-    '[role="radio"]',
-    '[role="tab"]',
-    '[role="menuitem"]',
-    '[role="option"]',
-    '[tabindex]:not([tabindex="-1"])',
     '[data-ghost-id]',
-    '[data-testid]',
   ],
   excludeSelectors: [
     '.sensitive-data',
@@ -46,18 +32,12 @@ const DEFAULT_OPTIONS: Required<ContextProviderOptions> = {
   onContextChange: () => {},
 };
 
-interface ObservedElement {
-  element: Element;
-  targetId: string;
-  lastValue: string;
-}
-
 export class ContextProvider {
   private options: Required<ContextProviderOptions>;
   private mutationObserver: MutationObserver | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private observedElements: Map<string, ObservedElement> = new Map();
+  private observedTargets: Set<Element> = new Set();
   private currentContext: ContextSnapshot | null = null;
   private isDestroyed = false;
 
@@ -116,7 +96,7 @@ export class ContextProvider {
       this.debounceTimer = null;
     }
 
-    this.observedElements.clear();
+    this.observedTargets.clear();
   }
 
   /**
@@ -153,34 +133,25 @@ export class ContextProvider {
   private captureValues(): Record<string, string | number | boolean> {
     const values: Record<string, string | number | boolean> = {};
 
-    // Capture from registered value selectors
-    for (const [key, selector] of Object.entries(this.options.valueSelectors)) {
-      const element = document.querySelector(selector);
-      if (element) {
-        if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-          values[key] = element.value;
-        } else if (element instanceof HTMLInputElement && element.type === 'checkbox') {
-          values[key] = element.checked;
-        } else {
-          values[key] = element.textContent?.trim() || '';
-        }
-      }
-    }
+    const elements = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-ghost-id][data-ghost-observe]')
+    ).slice(0, 50);
 
-    // Capture from observed elements
-    for (const [targetId, observed] of this.observedElements) {
-      if (observed.element instanceof HTMLInputElement || observed.element instanceof HTMLTextAreaElement || observed.element instanceof HTMLSelectElement) {
-        const value = observed.element.value;
-        if (value !== observed.lastValue) {
-          values[targetId] = value;
-          observed.lastValue = value;
-        }
-      } else if (observed.element instanceof HTMLInputElement && observed.element.type === 'checkbox') {
-        const value = observed.element.checked;
-        if (String(value) !== observed.lastValue) {
-          values[targetId] = value;
-          observed.lastValue = String(value);
-        }
+    for (const element of elements) {
+      if (this.isSensitive(element)) continue;
+      const targetId = element.getAttribute('data-ghost-id');
+      if (!targetId) continue;
+
+      if (element instanceof HTMLInputElement && (element.type === 'checkbox' || element.type === 'radio')) {
+        values[targetId] = element.checked;
+      } else if (
+        element instanceof HTMLInputElement ||
+        element instanceof HTMLTextAreaElement ||
+        element instanceof HTMLSelectElement
+      ) {
+        values[targetId] = (element.value || '').slice(0, 2000);
+      } else {
+        values[targetId] = (element.textContent || '').trim().slice(0, 200);
       }
     }
 
@@ -218,25 +189,8 @@ export class ContextProvider {
    * Get a stable target ID for an element
    */
   private getTargetId(element: HTMLElement): string | null {
-    // Priority order matching Element Targeting Cascade
     const ghostId = element.getAttribute('data-ghost-id');
     if (ghostId) return ghostId;
-
-    const testId = element.getAttribute('data-testid');
-    if (testId) return testId;
-
-    const id = element.id;
-    if (id) return id;
-
-    const ariaLabel = element.getAttribute('aria-label');
-    if (ariaLabel) return ariaLabel;
-
-    // For form elements, use name attribute
-    const name = element.getAttribute('name');
-    if (name && (element.tagName === 'INPUT' || element.tagName === 'SELECT' || element.tagName === 'TEXTAREA')) {
-      return name;
-    }
-
     return null;
   }
 
@@ -256,10 +210,24 @@ export class ContextProvider {
    * Check if element is sensitive (password, credit card, etc.)
    */
   private isSensitive(element: Element): boolean {
+    const sensitivePattern = /card|cvv|cvc|ssn|password|secret|token/i;
+    const name = element.getAttribute('name') || '';
+    const id = element.id || '';
+    if (sensitivePattern.test(name) || sensitivePattern.test(id)) {
+      return true;
+    }
+
     if (element instanceof HTMLInputElement) {
       if (element.type === 'password' || element.type === 'file' || element.type === 'hidden') return true;
       const autocomplete = element.getAttribute('autocomplete');
-      if (autocomplete && (autocomplete.includes('cc-') || autocomplete.includes('password') || autocomplete.includes('secret'))) return true;
+      if (
+        autocomplete &&
+        (autocomplete.includes('cc-') ||
+          autocomplete.includes('password') ||
+          autocomplete.includes('secret'))
+      ) {
+        return true;
+      }
     }
 
     if (element.hasAttribute('data-sensitive') || element.hasAttribute('data-pii')) return true;
@@ -268,31 +236,18 @@ export class ContextProvider {
   }
 
   /**
-   * Observe elements for value changes
+   * Observe elements for intersection (visibility)
    */
   private observeElements(): void {
+    if (!this.intersectionObserver) return;
     const selector = this.options.targetSelectors.join(',');
     const elements = document.querySelectorAll<HTMLElement>(selector);
 
     for (const element of elements) {
       if (this.isExcluded(element) || this.isSensitive(element)) continue;
-
-      const targetId = this.getTargetId(element);
-      if (!targetId) continue;
-
-      // Track initial value
-      let lastValue = '';
-      if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-        lastValue = element.value;
-      } else if (element instanceof HTMLInputElement && element.type === 'checkbox') {
-        lastValue = String(element.checked);
-      }
-
-      this.observedElements.set(targetId, { element, targetId, lastValue });
-
-      // Observe for intersection (visibility)
-      if (this.intersectionObserver) {
+      if (!this.observedTargets.has(element)) {
         this.intersectionObserver.observe(element);
+        this.observedTargets.add(element);
       }
     }
   }
@@ -306,17 +261,14 @@ export class ContextProvider {
     let shouldRecapture = false;
 
     for (const mutation of mutations) {
-      // Check if mutation affects observed elements
       if (mutation.type === 'attributes') {
         const target = mutation.target as Element;
-        const targetId = this.getTargetId(target as HTMLElement);
-        if (targetId && this.observedElements.has(targetId)) {
+        if (target.hasAttribute && (target.hasAttribute('data-ghost-id') || target.hasAttribute('data-ghost-observe'))) {
           shouldRecapture = true;
           break;
         }
       }
 
-      // Check for added/removed nodes that might be interactive
       if (mutation.type === 'childList') {
         for (const node of mutation.addedNodes) {
           if (node.nodeType === Node.ELEMENT_NODE) {
@@ -325,13 +277,10 @@ export class ContextProvider {
               shouldRecapture = true;
               break;
             }
-            // Check descendants
-            const descendants = el.querySelectorAll(this.options.targetSelectors.join(','));
-            for (const desc of descendants) {
-              if (!this.isExcluded(desc) && !this.isSensitive(desc)) {
-                shouldRecapture = true;
-                break;
-              }
+            const descendants = el.querySelectorAll?.(this.options.targetSelectors.join(','));
+            if (descendants && descendants.length > 0) {
+              shouldRecapture = true;
+              break;
             }
           }
         }
@@ -351,9 +300,7 @@ export class ContextProvider {
     let shouldRecapture = false;
 
     for (const entry of entries) {
-      const target = entry.target as HTMLElement;
-      const targetId = this.getTargetId(target);
-      if (targetId && this.observedElements.has(targetId)) {
+      if (entry.isIntersecting) {
         shouldRecapture = true;
         break;
       }

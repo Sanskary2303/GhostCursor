@@ -87,7 +87,7 @@ export function Cart() {
           <div className="space-y-3 text-sm">
             <div className="flex justify-between">
               <span className="text-gray-600">Subtotal</span>
-              <span data-ghost-id="cart.subtotal" className="font-medium">
+              <span data-ghost-id="cart.subtotal" data-ghost-observe className="font-medium">
                 ${subtotal.toFixed(2)}
               </span>
             </div>
@@ -120,7 +120,7 @@ export function Cart() {
             </div>
             <div className="border-t pt-3 flex justify-between text-lg font-bold">
               <span>Total</span>
-              <span data-ghost-id="cart.total">${total.toFixed(2)}</span>
+              <span data-ghost-id="cart.total" data-ghost-observe>${total.toFixed(2)}</span>
             </div>
 
             {/* Promo Code Input */}

@@ -17,6 +17,7 @@ from sqlalchemy.pool import NullPool
 
 from .types import ChatSession, ChatMessage
 
+
 # Base classes for async repositories
 class ChatStore(abc.ABC):
     """Abstract chat store interface"""
@@ -28,11 +29,16 @@ class ChatStore(abc.ABC):
         tenant_id: str,
         title: str = "New Conversation",
         metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> ChatSession:
         pass
 
     @abc.abstractmethod
     async def get_session(self, session_id: str, user_id: str) -> Optional[ChatSession]:
+        pass
+
+    @abc.abstractmethod
+    async def find_session_by_run(self, run_id: str, user_id: str) -> Optional[ChatSession]:
         pass
 
     @abc.abstractmethod
@@ -93,6 +99,7 @@ class ChatStore(abc.ABC):
 # SQL Alchemy Models
 Base = declarative_base()
 
+
 class SQGCBChatSession(Base):
     """SQLAlchemy model for ghost chat sessions"""
     __tablename__ = "ghost_chat_sessions"
@@ -121,6 +128,7 @@ class SQGCBChatMessage(Base):
 
     message_id = sa.Column(sa.VARCHAR(64), primary_key=True)
     session_id = sa.Column(sa.VARCHAR(64), sa.ForeignKey("ghost_chat_sessions.session_id"), nullable=False)
+    run_id = sa.Column(sa.VARCHAR(64), index=True, nullable=True)
     role = sa.Column(sa.VARCHAR(20), nullable=False)
     content = sa.Column(sa.Text, nullable=False)
     tool_calls = sa.Column(sa.JSON, default=list)
@@ -142,37 +150,22 @@ class SQLAlchemyChatStore(ChatStore):
         self,
         engine,
         session_factory: Optional[sa.orm.session.Session] = None,
-        auto_create_tables: bool = True,
+        tenant_id: Optional[str] = None,
     ):
         self.engine = engine
+        self.tenant_id = tenant_id
         self.session_factory = session_factory or sessionmaker(
             bind=engine,
             class_=AsyncSession,
             expire_on_commit=False,
         )
 
-        if auto_create_tables:
-            self._create_tables()
-
-    def _create_tables(self):
+    async def create_tables(self) -> None:
         """Create tables if they don't exist"""
-        async def _create():
-            async with self.engine.begin() as conn:
-                # Enable UUID extension if PostgreSQL
-                if "postgresql" in str(self.engine.url):
-                    await conn.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
-                await conn.run_sync(Base.metadata.create_all)
-
-        import asyncio
-        try:
-            asyncio.run(_create())
-        except RuntimeError:
-            # Already in an event loop
-            import threading
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, _create())
-                future.result()
+        async with self.engine.begin() as conn:
+            if "postgresql" in str(self.engine.url):
+                await conn.execute(sa.text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp";'))
+            await conn.run_sync(Base.metadata.create_all)
 
     async def _get_session(self) -> AsyncSession:
         """Get a new database session"""
@@ -184,12 +177,13 @@ class SQLAlchemyChatStore(ChatStore):
         tenant_id: str,
         title: str = "New Conversation",
         metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> ChatSession:
         async with await self._get_session() as session:
-            session_id = str(uuid.uuid4())
+            sess_id = session_id or str(uuid.uuid4())
 
             db_session = SQGCBChatSession(
-                session_id=session_id,
+                session_id=sess_id,
                 tenant_id=tenant_id,
                 user_id=user_id,
                 title=title,
@@ -230,6 +224,32 @@ class SQLAlchemyChatStore(ChatStore):
                 updated_at=result.updated_at,
             )
 
+    async def find_session_by_run(self, run_id: str, user_id: str) -> Optional[ChatSession]:
+        async with await self._get_session() as session:
+            query = (
+                sa.select(SQGCBChatSession)
+                .join(SQGCBChatMessage, SQGCBChatMessage.session_id == SQGCBChatSession.session_id)
+                .where(
+                    SQGCBChatMessage.run_id == run_id,
+                    SQGCBChatSession.user_id == user_id,
+                )
+            )
+            if self.tenant_id:
+                query = query.where(SQGCBChatSession.tenant_id == self.tenant_id)
+            result = await session.execute(query)
+            db_session = result.scalars().first()
+            if not db_session:
+                return None
+            return ChatSession(
+                session_id=db_session.session_id,
+                tenant_id=db_session.tenant_id,
+                user_id=db_session.user_id,
+                title=db_session.title,
+                summary=db_session.summary,
+                created_at=db_session.created_at,
+                updated_at=db_session.updated_at,
+            )
+
     async def list_sessions(
         self,
         user_id: str,
@@ -240,7 +260,11 @@ class SQLAlchemyChatStore(ChatStore):
             query = (
                 sa.select(SQGCBChatSession)
                 .where(SQGCBChatSession.user_id == user_id)
-                .order_by(sa.desc(SQGCBChatSession.updated_at))
+            )
+            if self.tenant_id:
+                query = query.where(SQGCBChatSession.tenant_id == self.tenant_id)
+            query = (
+                query.order_by(sa.desc(SQGCBChatSession.updated_at))
                 .offset(offset)
                 .limit(limit)
             )
@@ -292,6 +316,7 @@ class SQLAlchemyChatStore(ChatStore):
                     ChatMessage(
                         message_id=db_message.message_id,
                         session_id=db_message.session_id,
+                        run_id=db_message.run_id,
                         role=db_message.role,
                         content=db_message.content,
                         tool_calls=db_message.tool_calls or [],
@@ -320,6 +345,7 @@ class SQLAlchemyChatStore(ChatStore):
                 db_message = SQGCBChatMessage(
                     message_id=message_id,
                     session_id=session_id,
+                    run_id=msg_data.get("run_id"),
                     role=msg_data["role"],
                     content=msg_data["content"],
                     tool_calls=msg_data.get("tool_calls", []),
@@ -328,6 +354,7 @@ class SQLAlchemyChatStore(ChatStore):
                 )
                 session.add(db_message)
 
+            session_result.updated_at = datetime.now(timezone.utc)
             await session.commit()
 
     async def count_turns(self, session_id: str, user_id: str) -> int:
@@ -338,7 +365,8 @@ class SQLAlchemyChatStore(ChatStore):
                 return 0
 
             query = sa.select(sa.func.count()).select_from(SQGCBChatMessage).where(
-                SQGCBChatMessage.session_id == session_id
+                SQGCBChatMessage.session_id == session_id,
+                SQGCBChatMessage.role == "user",
             )
 
             result = await session.execute(query)
@@ -374,7 +402,7 @@ class SQLAlchemyChatStore(ChatStore):
             # Simple heuristics for demo
             word_count = len(full_text.split())
             summary = full_text[:200] + "..." if word_count > 50 else full_text
-            title = full_text.split("\\n\\n")[0][:50] if full_text else "New Conversation"
+            title = full_text.split("\n\n")[0][:50] if full_text else "New Conversation"
 
             # Update session
             session_result.summary = summary
@@ -416,9 +444,14 @@ class SQLAlchemyChatStore(ChatStore):
 class InMemoryChatStore(ChatStore):
     """In-memory implementation of ChatStore for fast local testing and lightweight setups"""
 
-    def __init__(self):
+    def __init__(self, tenant_id: Optional[str] = None):
+        self.tenant_id = tenant_id
         self._sessions: Dict[str, ChatSession] = {}
         self._messages: Dict[str, List[ChatMessage]] = {}
+
+    async def create_tables(self) -> None:
+        """No-op for in-memory store"""
+        pass
 
     async def create_session(
         self,
@@ -426,11 +459,12 @@ class InMemoryChatStore(ChatStore):
         tenant_id: str,
         title: str = "New Conversation",
         metadata: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> ChatSession:
-        session_id = str(uuid.uuid4())
+        sess_id = session_id or str(uuid.uuid4())
         now = datetime.now(timezone.utc)
         session = ChatSession(
-            session_id=session_id,
+            session_id=sess_id,
             tenant_id=tenant_id,
             user_id=user_id,
             title=title,
@@ -438,8 +472,8 @@ class InMemoryChatStore(ChatStore):
             created_at=now,
             updated_at=now,
         )
-        self._sessions[session_id] = session
-        self._messages[session_id] = []
+        self._sessions[sess_id] = session
+        self._messages[sess_id] = []
         return session
 
     async def get_session(self, session_id: str, user_id: str) -> Optional[ChatSession]:
@@ -448,13 +482,26 @@ class InMemoryChatStore(ChatStore):
             return session
         return None
 
+    async def find_session_by_run(self, run_id: str, user_id: str) -> Optional[ChatSession]:
+        for session_id, msgs in self._messages.items():
+            for msg in msgs:
+                if getattr(msg, "run_id", None) == run_id:
+                    sess = self._sessions.get(session_id)
+                    if sess and sess.user_id == user_id:
+                        if self.tenant_id is None or sess.tenant_id == self.tenant_id:
+                            return sess
+        return None
+
     async def list_sessions(
         self,
         user_id: str,
         limit: int = 20,
         offset: int = 0,
     ) -> List[ChatSession]:
-        user_sessions = [s for s in self._sessions.values() if s.user_id == user_id]
+        user_sessions = [
+            s for s in self._sessions.values()
+            if s.user_id == user_id and (self.tenant_id is None or s.tenant_id == self.tenant_id)
+        ]
         user_sessions.sort(key=lambda s: s.updated_at, reverse=True)
         return user_sessions[offset : offset + limit]
 
@@ -485,6 +532,7 @@ class InMemoryChatStore(ChatStore):
             chat_msg = ChatMessage(
                 message_id=msg.get("message_id") or str(uuid.uuid4()),
                 session_id=session_id,
+                run_id=msg.get("run_id"),
                 role=msg["role"],
                 content=msg["content"],
                 tool_calls=msg.get("tool_calls", []),

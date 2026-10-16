@@ -60,6 +60,7 @@ class BrowserStart(_Strict):
     command: Literal["start"]
     protocolVersion: Literal["1"] = "1"
     requestId: uuid.UUID
+    sessionId: Optional[uuid.UUID] = None
     message: str = Field(min_length=1, max_length=6000)
     context: BrowserContext = Field(default_factory=BrowserContext)
 
@@ -381,8 +382,11 @@ class GhostCursorBackend:
 
         # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
         rounds = 0
+        executed_tool_calls: List[Dict[str, str]] = []
         while response.toolCalls and rounds < self.config.max_tool_rounds:
             rounds += 1
+            for tc in response.toolCalls:
+                executed_tool_calls.append({"id": tc.id, "tool": tc.tool})
             tool_results = await self._execute_local_tools(
                 response.runId,
                 response.revision,
@@ -437,7 +441,7 @@ class GhostCursorBackend:
             safe_response = response.model_copy(
                 update={"reply": result["reply"], "actions": result["actions"]}
             )
-            await self._persist_turn(payload, safe_response, user_id)
+            await self._persist_turn(payload, safe_response, user_id, executed_tool_calls=executed_tool_calls)
 
         return result
 
@@ -558,22 +562,41 @@ class GhostCursorBackend:
         request_payload: Dict[str, Any],
         response: HostedRunResponse,
         user_id: str,
+        executed_tool_calls: Optional[List[Dict[str, str]]] = None,
     ):
         """Persist conversation turn to chat store"""
         if not self.chat_store or not response.runId:
             return
 
         try:
-            session_id = request_payload.get("sessionId") or response.runId
-            session = await self.chat_store.get_session(session_id, user_id)
-            if not session:
-                user_msg = request_payload.get("message") or request_payload.get("answer") or "New Conversation"
-                title = str(user_msg)[:50]
-                session = await self.chat_store.create_session(
-                    user_id=user_id,
-                    tenant_id=self.config.tenant_id,
-                    title=title,
-                )
+            command = request_payload.get("command")
+            session = None
+            if command == "start":
+                session_id_val = request_payload.get("sessionId")
+                if session_id_val:
+                    session = await self.chat_store.get_session(str(session_id_val), user_id)
+                if not session:
+                    user_msg = request_payload.get("message") or "New Conversation"
+                    title = str(user_msg)[:50]
+                    session = await self.chat_store.create_session(
+                        user_id=user_id,
+                        tenant_id=self.config.tenant_id,
+                        title=title,
+                        session_id=str(session_id_val) if session_id_val else None,
+                    )
+                session_id = session.session_id
+            else:
+                # continue
+                run_id = str(response.runId)
+                session = await self.chat_store.find_session_by_run(run_id, user_id)
+                if not session:
+                    user_msg = request_payload.get("message") or request_payload.get("answer") or "New Conversation"
+                    title = str(user_msg)[:50]
+                    session = await self.chat_store.create_session(
+                        user_id=user_id,
+                        tenant_id=self.config.tenant_id,
+                        title=title,
+                    )
                 session_id = session.session_id
 
             messages = []
@@ -581,24 +604,39 @@ class GhostCursorBackend:
                 messages.append({
                     "role": "user",
                     "content": request_payload["message"],
+                    "run_id": str(response.runId),
                 })
             elif request_payload.get("answer"):
                 messages.append({
                     "role": "user",
                     "content": request_payload["answer"],
+                    "run_id": str(response.runId),
                 })
 
-            if response.reply:
-                messages.append({
+            if response.reply is not None:
+                assistant_msg: Dict[str, Any] = {
                     "role": "assistant",
                     "content": response.reply,
+                    "run_id": str(response.runId),
                     "client_actions": [
                         a if isinstance(a, dict) else a.model_dump() for a in (response.actions or [])
                     ],
-                })
+                    "tool_calls": executed_tool_calls or [],
+                }
+                messages.append(assistant_msg)
 
             if messages:
                 await self.chat_store.append_messages(session_id, user_id, messages)
+
+            user_turns = await self.chat_store.count_turns(session_id, user_id)
+            if user_turns > 0 and user_turns % 4 == 0:
+                summary, title = await self.chat_store.generate_summary_and_title(session_id, user_id)
+                await self.chat_store.update_session_metadata(
+                    session_id=session_id,
+                    user_id=user_id,
+                    title=title,
+                    summary=summary,
+                )
         except Exception as e:
             logger.warning(f"Failed to persist chat turn: {e}")
 

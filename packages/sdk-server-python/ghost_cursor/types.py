@@ -40,6 +40,7 @@ class ChatMessage:
     client_actions: List[Dict[str, Any]]
     token_count: int
     created_at: datetime
+    run_id: Optional[str] = None
 
     @property
     def metadata(self) -> Dict[str, Any]:

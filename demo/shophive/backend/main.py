@@ -29,6 +29,8 @@ except ImportError:
     print("Error: ghost-cursor package not found. Install with: pip install ghost-cursor")
     sys.exit(1)
 
+from sqlalchemy.ext.asyncio import create_async_engine
+
 # Import local modules
 from tools.ghost_tools import register_shophive_tools
 
@@ -41,7 +43,9 @@ GHOST_CURSOR_TENANT_ID = os.getenv("GHOST_CURSOR_TENANT_ID", "shophive_demo")
 GHOST_CURSOR_BRAIN_DIR = os.getenv("GHOST_CURSOR_BRAIN_DIR", str(backend_dir / "brain"))
 GHOST_CURSOR_SERVICE_URL = os.getenv("GHOST_CURSOR_SERVICE_URL", "http://localhost:8080")
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./shophive.db")
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./shophive.db")
+if DATABASE_URL.startswith("sqlite:///"):
+    DATABASE_URL = DATABASE_URL.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
 
 # ============================================================================
 # Application Setup
@@ -95,8 +99,21 @@ ghost = GhostCursorBackend(
 )
 
 # Attach chat store for conversation persistence
-chat_store = InMemoryChatStore()
+db_engine = create_async_engine(DATABASE_URL)
+chat_store = SQLAlchemyChatStore(db_engine, tenant_id=GHOST_CURSOR_TENANT_ID)
 ghost.attach_chat_store(chat_store)
+
+_tables_initialized = False
+
+async def ensure_tables():
+    global _tables_initialized
+    if not _tables_initialized:
+        await chat_store.create_tables()
+        _tables_initialized = True
+
+@app.on_event("startup")
+async def startup_event():
+    await ensure_tables()
 
 # Register customer backend tools
 register_shophive_tools(ghost)
@@ -178,6 +195,7 @@ async def handle_ghost_turn(request: Request, user_id: str = Depends(require_use
         )
 
     try:
+        await ensure_tables()
         data = await ghost.handle_turn(payload=payload, user_id=user_id)
         return JSONResponse(data)
     except GatewayError as e:
@@ -197,6 +215,7 @@ async def handle_ghost_turn(request: Request, user_id: str = Depends(require_use
 @ghost_router.get("/sessions")
 async def list_sessions(user_id: str = Depends(require_user)):
     """List user chat sessions"""
+    await ensure_tables()
     if ghost.chat_store:
         sessions = await ghost.chat_store.list_sessions(user_id)
         return {

@@ -580,5 +580,349 @@ async def test_backend_only_declares_customer_backend_tools():
     assert decls[0]["name"] == "custom_lookup"
 
 
+from ghost_cursor import SQLAlchemyChatStore
+from sqlalchemy.ext.asyncio import create_async_engine
+
+
+@pytest.mark.asyncio
+async def test_chat_persistence_start_and_continue_same_session():
+    """Start + answer in one run -> one session with 4 messages, all having run_id"""
+    store = InMemoryChatStore(tenant_id="tenant_main")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_main",
+    )
+    backend.attach_chat_store(store)
+
+    run_id = str(uuid.uuid4())
+    step = 0
+
+    def mock_handler(request):
+        nonlocal step
+        step += 1
+        if step == 1:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 1,
+                "status": "awaiting_answer",
+                "reply": "Which size would you like?",
+                "questions": [{"id": "q1", "question": "Size?", "options": ["9", "10"]}],
+                "actions": None,
+            })
+        else:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Added size 10 to cart.",
+                "questions": None,
+                "actions": None,
+            })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    # 1. Start turn
+    start_payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Add shoes to my cart",
+        "context": {"page": "product", "values": {}, "availableTargets": []},
+    }
+    res1 = await backend.handle_turn(start_payload, "user_alice")
+    assert res1["status"] == "awaiting_answer"
+
+    # Verify session and messages after start
+    sessions = await store.list_sessions("user_alice")
+    assert len(sessions) == 1
+    session_id = sessions[0].session_id
+
+    msgs1 = await store.get_messages(session_id, "user_alice")
+    assert len(msgs1) == 2
+    assert msgs1[0].role == "user"
+    assert msgs1[0].content == "Add shoes to my cart"
+    assert msgs1[0].run_id == run_id
+    assert msgs1[1].role == "assistant"
+    assert msgs1[1].content == "Which size would you like?"
+    assert msgs1[1].run_id == run_id
+
+    # 2. Continue turn (answer)
+    continue_payload = {
+        "command": "continue",
+        "protocolVersion": "1",
+        "runId": run_id,
+        "eventId": str(uuid.uuid4()),
+        "revision": 1,
+        "kind": "answer",
+        "answer": "10",
+    }
+    res2 = await backend.handle_turn(continue_payload, "user_alice")
+    assert res2["status"] == "completed"
+
+    # Verify still exactly 1 session, now with 4 messages
+    sessions = await store.list_sessions("user_alice")
+    assert len(sessions) == 1
+    msgs2 = await store.get_messages(session_id, "user_alice")
+    assert len(msgs2) == 4
+    assert [m.role for m in msgs2] == ["user", "assistant", "user", "assistant"]
+    assert msgs2[2].content == "10"
+    assert msgs2[2].run_id == run_id
+    assert msgs2[3].content == "Added size 10 to cart."
+    assert msgs2[3].run_id == run_id
+
+
+@pytest.mark.asyncio
+async def test_second_start_creates_new_session_or_reuses_session_id():
+    """A second start creates a new session, or reuses session if sessionId provided"""
+    store = InMemoryChatStore(tenant_id="tenant_main")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_main",
+    )
+    backend.attach_chat_store(store)
+
+    run_id_1 = str(uuid.uuid4())
+    run_id_2 = str(uuid.uuid4())
+    run_id_3 = str(uuid.uuid4())
+
+    def mock_handler(request):
+        body = json.loads(request.content)
+        if "first" in body.get("message", ""):
+            rid = run_id_1
+        elif "second" in body.get("message", ""):
+            rid = run_id_2
+        else:
+            rid = run_id_3
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": rid,
+            "revision": 0,
+            "status": "completed",
+            "reply": "Reply for " + body.get("message", ""),
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    # First start
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "first start",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_bob")
+
+    sessions = await store.list_sessions("user_bob")
+    assert len(sessions) == 1
+    session_1_id = sessions[0].session_id
+
+    # Second start without sessionId -> new session created
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "second start",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_bob")
+
+    sessions = await store.list_sessions("user_bob")
+    assert len(sessions) == 2
+
+    # Third start with explicit sessionId -> reuses session_1
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session_1_id,
+        "message": "third message to session 1",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_bob")
+
+    sessions = await store.list_sessions("user_bob")
+    assert len(sessions) == 2
+    session_1_msgs = await store.get_messages(session_1_id, "user_bob")
+    assert len(session_1_msgs) == 4  # 2 messages from first turn + 2 from third turn
+
+
+@pytest.mark.asyncio
+async def test_chat_sessions_scoping_by_user_and_tenant():
+    """Sessions of another user or tenant are never listed"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store_tenant_a = SQLAlchemyChatStore(engine, tenant_id="tenant_a")
+    await store_tenant_a.create_tables()
+
+    store_tenant_b = SQLAlchemyChatStore(engine, tenant_id="tenant_b")
+
+    # Create session for user_1 in tenant_a
+    sess1 = await store_tenant_a.create_session("user_1", "tenant_a", title="User 1 Tenant A")
+    # Create session for user_2 in tenant_a
+    sess2 = await store_tenant_a.create_session("user_2", "tenant_a", title="User 2 Tenant A")
+    # Create session for user_1 in tenant_b
+    sess3 = await store_tenant_b.create_session("user_1", "tenant_b", title="User 1 Tenant B")
+
+    # User 1 on Tenant A sees only User 1's Tenant A session
+    u1_ta = await store_tenant_a.list_sessions("user_1")
+    assert len(u1_ta) == 1
+    assert u1_ta[0].session_id == sess1.session_id
+
+    # User 2 on Tenant A sees only User 2's Tenant A session
+    u2_ta = await store_tenant_a.list_sessions("user_2")
+    assert len(u2_ta) == 1
+    assert u2_ta[0].session_id == sess2.session_id
+
+    # User 1 on Tenant B sees only User 1's Tenant B session
+    u1_tb = await store_tenant_b.list_sessions("user_1")
+    assert len(u1_tb) == 1
+    assert u1_tb[0].session_id == sess3.session_id
+
+    # User 2 on Tenant B has no sessions
+    u2_tb = await store_tenant_b.list_sessions("user_2")
+    assert len(u2_tb) == 0
+
+
+@pytest.mark.asyncio
+async def test_assistant_tool_calls_recorded_without_outputs():
+    """Assistant messages record executed tool calls as [{'id': ..., 'tool': ...}] without outputs"""
+    store = InMemoryChatStore(tenant_id="tenant_main")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_main",
+    )
+    backend.attach_chat_store(store)
+
+    @backend.register_tool(
+        name="lookup_order",
+        description="Lookup order details",
+        schema={"type": "object", "properties": {"order_id": {"type": "string"}}},
+    )
+    def lookup_order(order_id: str) -> dict:
+        return {"status": "shipped", "tracking": "TRK-9999", "secret_debug": "never-store-outputs"}
+
+    run_id = str(uuid.uuid4())
+    step = 0
+
+    def mock_handler(request):
+        nonlocal step
+        step += 1
+        if step == 1:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 1,
+                "status": "awaiting_tools",
+                "reply": "Looking up your order...",
+                "questions": None,
+                "actions": None,
+                "toolCalls": [
+                    {
+                        "id": "tc_order_1",
+                        "tool": "lookup_order",
+                        "parameters": {"order_id": "SH-101"},
+                    }
+                ],
+            })
+        else:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Your order SH-101 is shipped!",
+                "questions": None,
+                "actions": None,
+            })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Where is my order SH-101?",
+        "context": {"page": "orders", "values": {}, "availableTargets": []},
+    }
+    result = await backend.handle_turn(payload, "user_charlie")
+    assert result["status"] == "completed"
+
+    sessions = await store.list_sessions("user_charlie")
+    assert len(sessions) == 1
+    msgs = await store.get_messages(sessions[0].session_id, "user_charlie")
+    assert len(msgs) == 2
+    assistant_msg = msgs[1]
+    assert assistant_msg.role == "assistant"
+    assert assistant_msg.tool_calls == [{"id": "tc_order_1", "tool": "lookup_order"}]
+    # Output must NOT be present
+    assert "output" not in assistant_msg.tool_calls[0]
+    assert "secret_debug" not in json.dumps(assistant_msg.tool_calls)
+
+
+@pytest.mark.asyncio
+async def test_session_auto_summary_after_four_user_turns():
+    """Summarization and title update are triggered every 4 user turns"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SQLAlchemyChatStore(engine, tenant_id="tenant_summary")
+    await store.create_tables()
+
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_summary",
+    )
+    backend.attach_chat_store(store)
+
+    run_id = str(uuid.uuid4())
+
+    def mock_handler(request):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 0,
+            "status": "completed",
+            "reply": "Assistant reply regarding sneaker selection and sizing advice.",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._http_client = httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    # Turn 1: start
+    await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn 1 user question",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_dan")
+
+    sessions = await store.list_sessions("user_dan")
+    assert len(sessions) == 1
+    session_id = sessions[0].session_id
+    assert sessions[0].summary is None
+
+    # Turns 2, 3, 4 with continue (or start with same sessionId)
+    for i in range(2, 5):
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "sessionId": session_id,
+            "message": f"Turn {i} user question",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }, "user_dan")
+
+    turns = await store.count_turns(session_id, "user_dan")
+    assert turns == 4
+
+    # Now verify summary and title were updated
+    updated_session = await store.get_session(session_id, "user_dan")
+    assert updated_session is not None
+    assert updated_session.summary is not None
+    assert len(updated_session.summary) > 0
+
+
+
 
 

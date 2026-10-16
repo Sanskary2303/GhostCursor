@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/BrowserStartRequest",
+  "definitions": {
+    "BrowserStartRequest": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "string",
+          "const": "start"
+        },
+        "protocolVersion": {
+          "$ref": "#/definitions/ProtocolVersion"
+        },
+        "requestId": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "message": {
+          "type": "string"
+        },
+        "context": {
+          "$ref": "#/definitions/PageContext"
+        }
+      },
+      "required": [
+        "command",
+        "protocolVersion",
+        "requestId",
+        "message",
+        "context"
+      ],
+      "additionalProperties": false
+    },
+    "ProtocolVersion": {
+      "type": "string",
+      "const": "1",
+      "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
+    },
+    "RequestId": {
+      "type": "string"
+    },
+    "PageContext": {
+      "type": "object",
+      "properties": {
+        "page": {
+          "type": "string"
+        },
+        "values": {
+          "$ref": "#/definitions/Record%3Cstring%2C(string%7Cnumber%7Cboolean)%3E"
+        },
+        "availableTargets": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "page",
+        "values",
+        "availableTargets"
+      ],
+      "additionalProperties": false
+    },
+    "Record<string,(string|number|boolean)>": {
+      "type": "object",
+      "additionalProperties": {
+        "type": [
+          "string",
+          "number",
+          "boolean"
+        ]
+      }
+    }
+  }
+}

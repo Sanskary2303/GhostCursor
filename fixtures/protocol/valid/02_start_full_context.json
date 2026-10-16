@@ -1,0 +1,19 @@
+{
+  "command": "start",
+  "protocolVersion": "1",
+  "requestId": "123e4567-e89b-12d3-a456-426614174000",
+  "sessionId": "223e4567-e89b-12d3-a456-426614174001",
+  "message": "Add item to cart",
+  "context": {
+    "page": "products",
+    "values": {
+      "search": "running shoes",
+      "page_num": 1,
+      "in_stock_only": true
+    },
+    "availableTargets": [
+      "product.size.10",
+      "product.add_to_cart_btn"
+    ]
+  }
+}

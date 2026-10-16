@@ -61,6 +61,7 @@ include = ["ghost_cursor*"]
 
 [tool.setuptools.package-data]
 "*" = ["py.typed"]
+ghost_cursor = ["schemas/*.json"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

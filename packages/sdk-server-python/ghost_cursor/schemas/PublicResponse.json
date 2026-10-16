@@ -1,0 +1,166 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$ref": "#/definitions/PublicResponse",
+  "definitions": {
+    "PublicResponse": {
+      "type": "object",
+      "properties": {
+        "protocolVersion": {
+          "$ref": "#/definitions/ProtocolVersion"
+        },
+        "runId": {
+          "$ref": "#/definitions/RunId"
+        },
+        "revision": {
+          "type": "number"
+        },
+        "status": {
+          "$ref": "#/definitions/RunStatus"
+        },
+        "reply": {
+          "type": "string"
+        },
+        "questions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ClarifyQuestion"
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Action"
+          }
+        }
+      },
+      "required": [
+        "protocolVersion",
+        "runId",
+        "revision",
+        "status",
+        "reply"
+      ],
+      "additionalProperties": false
+    },
+    "ProtocolVersion": {
+      "type": "string",
+      "const": "1",
+      "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
+    },
+    "RunId": {
+      "type": "string"
+    },
+    "RunStatus": {
+      "type": "string",
+      "enum": [
+        "awaiting_actions",
+        "awaiting_answer",
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "ClarifyQuestion": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "question",
+        "options"
+      ],
+      "additionalProperties": false
+    },
+    "Action": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/definitions/ActionType"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        "target_page": {
+          "type": "string"
+        },
+        "explanation": {
+          "type": "string"
+        },
+        "state": {
+          "type": "boolean"
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/TourStep"
+          }
+        },
+        "question": {
+          "type": "string"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "option": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "additionalProperties": false
+    },
+    "ActionType": {
+      "type": "string",
+      "enum": [
+        "navigate",
+        "click",
+        "fill_input",
+        "select_option",
+        "toggle_switch",
+        "guided_tour",
+        "ask_clarification"
+      ]
+    },
+    "TourStep": {
+      "type": "object",
+      "properties": {
+        "target_id": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "spotlight": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "target_id",
+        "message"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

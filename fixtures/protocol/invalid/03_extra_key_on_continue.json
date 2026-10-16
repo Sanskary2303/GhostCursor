@@ -1,0 +1,9 @@
+{
+  "command": "continue",
+  "protocolVersion": "1",
+  "runId": "123e4567-e89b-12d3-a456-426614174000",
+  "eventId": "223e4567-e89b-12d3-a456-426614174001",
+  "revision": 0,
+  "kind": "actions",
+  "forbiddenField": 42
+}

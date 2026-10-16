@@ -1,0 +1,22 @@
+{
+  "command": "continue",
+  "protocolVersion": "1",
+  "runId": "123e4567-e89b-12d3-a456-426614174000",
+  "eventId": "223e4567-e89b-12d3-a456-426614174001",
+  "revision": 1,
+  "kind": "actions",
+  "results": [
+    {
+      "id": "act_1",
+      "ok": true,
+      "output": {
+        "clicked": true
+      }
+    },
+    {
+      "id": "act_2",
+      "ok": false,
+      "error": "Element not ready"
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "command": "start",
+  "protocolVersion": "1",
+  "requestId": "not-a-valid-uuid",
+  "message": "Hello"
+}

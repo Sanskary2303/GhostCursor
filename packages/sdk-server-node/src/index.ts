@@ -54,6 +54,8 @@ export interface GatewayOptions {
     | Tool[];
   filterResponse?: (publicResponse: PublicResponse, subject: string) => Promise<PublicResponse> | PublicResponse;
   fetch?: typeof globalThis.fetch;
+  requestTimeoutMs?: number;
+  toolTimeoutMs?: number;
 }
 
 interface HostedToolCall {
@@ -146,6 +148,26 @@ async function readBodyWithCap(res: Response, maxBytes: number): Promise<string>
   return text;
 }
 
+function matchesSchema(schema: any, value: any): boolean {
+  if (!schema || typeof schema !== 'object') return true;
+  const t = schema.type;
+  if (t === 'object') {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    for (const key of schema.required ?? []) if (!(key in value)) return false;
+    for (const [key, sub] of Object.entries(schema.properties ?? {})) {
+      if (key in value && !matchesSchema(sub, value[key])) return false;
+    }
+    return true;
+  }
+  if (t === 'array') return Array.isArray(value) && value.every((v) => matchesSchema(schema.items, v));
+  if (t === 'string' && typeof value !== 'string') return false;
+  if (t === 'boolean' && typeof value !== 'boolean') return false;
+  if (t === 'number' && typeof value !== 'number') return false;
+  if (t === 'integer' && !Number.isInteger(value)) return false;
+  if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return false;
+  return true;
+}
+
 export class Gateway {
   private readonly serviceUrl: string;
   private readonly serviceKey: string;
@@ -157,6 +179,8 @@ export class Gateway {
     | Tool[];
   private readonly filterResponse?: (publicResponse: PublicResponse, subject: string) => Promise<PublicResponse> | PublicResponse;
   private readonly fetchFn: typeof globalThis.fetch;
+  private readonly requestTimeoutMs: number;
+  private readonly toolTimeoutMs: number;
 
   constructor(options: GatewayOptions) {
     if (!options) throw new Error("GatewayOptions are required");
@@ -170,6 +194,8 @@ export class Gateway {
     this.tools = options.tools;
     this.filterResponse = options.filterResponse;
     this.fetchFn = options.fetch || globalThis.fetch;
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 210_000;
+    this.toolTimeoutMs = options.toolTimeoutMs ?? 10_000;
   }
 
   private async resolveBrain(subject: string, context: BrowserContext): Promise<string> {
@@ -236,6 +262,7 @@ export class Gateway {
         },
         body: JSON.stringify(body),
         redirect: "manual",
+        signal: AbortSignal.timeout(this.requestTimeoutMs),
       });
     } catch {
       throw new GatewayError(502, "upstream_unavailable");
@@ -342,11 +369,23 @@ export class Gateway {
             continue;
           }
 
+          const args = tc.parameters ?? {};
+          if (!matchesSchema(tool.inputSchema, args)) {
+            toolResults.push({ id: tc.id, ok: false, error: "invalid arguments" });
+            continue;
+          }
+
+          const ctx: ToolContext = {
+            subject,
+            idempotencyKey: `${hostedResponse.runId}:${hostedResponse.revision}:${tc.id}`,
+          };
+
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("tool timed out")), this.toolTimeoutMs);
+          });
           try {
-            const output = await tool.execute(tc.parameters, {
-              subject,
-              idempotencyKey: `${hostedResponse.runId}:${hostedResponse.revision}:${tc.id}`,
-            });
+            const output = await Promise.race([Promise.resolve(tool.execute(args, ctx)), timeout]);
 
             let outVal = output;
             const serialized = JSON.stringify(output);
@@ -364,6 +403,8 @@ export class Gateway {
               ok: false,
               error: String(err?.message || err).slice(0, 500),
             });
+          } finally {
+            clearTimeout(timer);
           }
         }
       }

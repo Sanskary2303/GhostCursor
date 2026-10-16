@@ -535,4 +535,171 @@ describe("Gateway Execution and Error Handling", () => {
       code: "upstream_unavailable",
     });
   });
+
+  it("times out upstream fetch when requestTimeoutMs is exceeded", async () => {
+    const hangingFetch = vi.fn().mockImplementation((_url: string, init?: any) => {
+      return new Promise<Response>((_, reject) => {
+        if (init?.signal) {
+          if (init.signal.aborted) {
+            reject(init.signal.reason);
+          } else {
+            init.signal.addEventListener("abort", () => reject(init.signal.reason));
+          }
+        }
+      });
+    });
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-key",
+      loadBrain: "# Brain",
+      requestTimeoutMs: 50,
+      fetch: hangingFetch,
+    });
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "Hello",
+      }),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "upstream_unavailable",
+    });
+  });
+
+  it("times out tool execution when toolTimeoutMs is exceeded and sends tool timed out error", async () => {
+    let continuePayload: any = null;
+    const mockFetch = vi.fn().mockImplementation(async (_url: string, init?: any) => {
+      const body = JSON.parse(init?.body || "{}");
+      if (body.kind === "tools") {
+        continuePayload = body;
+        return new Response(
+          JSON.stringify({
+            protocolVersion: "1",
+            runId: VALID_UUID_1,
+            revision: 2,
+            status: "completed",
+            reply: "Timed out tool handled",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Running hanging tool",
+          toolCalls: [{ id: "t_hang_1", tool: "hanging_tool", parameters: {} }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const hangingTool = {
+      description: "Hangs forever",
+      execute: vi.fn().mockImplementation(() => new Promise(() => {})),
+    };
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-key",
+      loadBrain: "# Brain",
+      toolTimeoutMs: 50,
+      tools: {
+        hanging_tool: hangingTool,
+      },
+      fetch: mockFetch,
+    });
+
+    const result = await gateway.handle("user_1", {
+      command: "start",
+      protocolVersion: "1",
+      requestId: VALID_UUID_1,
+      message: "Run hanging tool",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(continuePayload).not.toBeNull();
+    expect(continuePayload.kind).toBe("tools");
+    expect(continuePayload.results).toHaveLength(1);
+    expect(continuePayload.results[0]).toEqual({
+      id: "t_hang_1",
+      ok: false,
+      error: "tool timed out",
+    });
+  });
+
+  it("rejects tool call with invalid arguments against inputSchema without calling execute", async () => {
+    let continuePayload: any = null;
+    const mockFetch = vi.fn().mockImplementation(async (_url: string, init?: any) => {
+      const body = JSON.parse(init?.body || "{}");
+      if (body.kind === "tools") {
+        continuePayload = body;
+        return new Response(
+          JSON.stringify({
+            protocolVersion: "1",
+            runId: VALID_UUID_1,
+            revision: 2,
+            status: "completed",
+            reply: "Invalid args handled",
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Validating args",
+          toolCalls: [{ id: "t_invalid_1", tool: "strict_tool", parameters: { order_id: 5 } }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const mockExecute = vi.fn().mockResolvedValue({ success: true });
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-key",
+      loadBrain: "# Brain",
+      tools: {
+        strict_tool: {
+          description: "Strict order tool",
+          inputSchema: {
+            type: "object",
+            required: ["order_id"],
+            properties: { order_id: { type: "string" } },
+          },
+          execute: mockExecute,
+        },
+      },
+      fetch: mockFetch,
+    });
+
+    const result = await gateway.handle("user_1", {
+      command: "start",
+      protocolVersion: "1",
+      requestId: VALID_UUID_1,
+      message: "Check order",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(mockExecute).not.toHaveBeenCalled();
+    expect(continuePayload).not.toBeNull();
+    expect(continuePayload.kind).toBe("tools");
+    expect(continuePayload.results).toHaveLength(1);
+    expect(continuePayload.results[0]).toEqual({
+      id: "t_invalid_1",
+      ok: false,
+      error: "invalid arguments",
+    });
+  });
 });

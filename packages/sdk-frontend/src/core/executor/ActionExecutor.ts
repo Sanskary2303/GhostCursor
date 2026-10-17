@@ -8,11 +8,23 @@ import { setNativeValue, setNativeSelectValue, setNativeCheckboxState, verifyVal
 import { resolveTargetWithCascade, reResolveElement, ResolutionOptions, getRegisteredTarget } from '../dom-utils';
 import { TourEngine } from '../engine/TourEngine';
 
+export interface StepInfo {
+  action: Action;
+  /** 0-based index in the plan. */
+  index: number;
+  total: number;
+  /** Aborted when the user presses Stop. */
+  signal: AbortSignal;
+}
+
 export interface ExecutionOptions {
   timeout?: number;
   requireApproval?: boolean;
   onProgress?: (step: string, status: 'pending' | 'executing' | 'completed' | 'failed') => void;
+  /** @deprecated Use onAim. Still called, but not awaited. */
   onCursorMove?: (element: HTMLElement) => void;
+  /** Called and awaited once the target is on screen, before acting. Fly the cursor here. */
+  onAim?: (element: HTMLElement, info: StepInfo) => Promise<void> | void;
   allowSemanticLookup?: boolean;
 }
 
@@ -27,32 +39,48 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   requireApproval: true,
   onProgress: () => {},
   onCursorMove: () => {},
+  onAim: () => {},
   allowSemanticLookup: false,
 };
 
-/**
- * Animates the ghost cursor to a target element
- */
-async function animateCursorTo(element: HTMLElement, onCursorMove: (el: HTMLElement) => void): Promise<void> {
-  const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
 
-  // Scroll element into view
+/** Waits until the element stops moving (smooth scroll finished), at most maxMs. */
+async function waitForScrollSettle(element: HTMLElement, maxMs: number): Promise<void> {
+  if (maxMs <= 0 || typeof requestAnimationFrame !== 'function') return;
+  const start = Date.now();
+  let last = element.getBoundingClientRect();
+  let stableFrames = 0;
+  while (Date.now() - start < maxMs) {
+    await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+    const now = element.getBoundingClientRect();
+    if (Math.abs(now.top - last.top) < 0.5 && Math.abs(now.left - last.left) < 0.5) {
+      stableFrames += 1;
+      if (stableFrames >= 2) return;
+    } else {
+      stableFrames = 0;
+    }
+    last = now;
+  }
+}
+
+/** Scrolls the target into view, lets it settle, then lets the cursor fly to it (awaited). */
+async function animateCursorTo(element: HTMLElement, options: Required<ExecutionOptions>, info: StepInfo): Promise<void> {
+  const reduced = prefersReducedMotion();
   if (typeof element.scrollIntoView === 'function') {
     element.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth', block: 'center', inline: 'center' });
   }
+  await waitForScrollSettle(element, reduced ? 0 : 600);
+  if (info.signal.aborted) return;
+  options.onCursorMove(element);
+  await options.onAim(element, info);
+}
 
-  // Wait for scroll to complete
-  if (!reduced) {
-    await new Promise(resolve => setTimeout(resolve, 300));
-  }
-
-  // Trigger cursor animation callback
-  onCursorMove(element);
-
-  // Small delay for visual effect
-  if (!reduced) {
-    await new Promise(resolve => setTimeout(resolve, 200));
-  }
+function cancelledResult(): ToolResult {
+  return { id: crypto.randomUUID(), ok: false, error: 'cancelled by user' };
 }
 
 const TARGET_ID_PATTERN = /^[a-zA-Z0-9_.:-]{1,120}$/;
@@ -69,7 +97,7 @@ const OP_MAP: Record<string, string> = {
 async function executeAction(
   action: Action,
   options: Required<ExecutionOptions>,
-  signal?: AbortSignal
+  info: StepInfo
 ): Promise<ToolResult> {
   const { target_id, value, target_page, explanation, state, steps } = action;
 
@@ -95,22 +123,22 @@ async function executeAction(
 
     switch (action.type) {
       case 'navigate':
-        return await executeNavigate(target_page!, options);
+        return await executeNavigate(target_page!, options, info);
 
       case 'click':
-        return await executeClick(target_id!, options);
+        return await executeClick(target_id!, options, info);
 
       case 'fill_input':
-        return await executeFillInput(target_id!, value!, options);
+        return await executeFillInput(target_id!, value!, options, info);
 
       case 'select_option':
-        return await executeSelectOption(target_id!, action.option ?? value!, options);
+        return await executeSelectOption(target_id!, action.option ?? value!, options, info);
 
       case 'toggle_switch':
-        return await executeToggleSwitch(target_id!, state!, options);
+        return await executeToggleSwitch(target_id!, state!, options, info);
 
       case 'guided_tour':
-        return await executeGuidedTour(steps || [], options, signal);
+        return await executeGuidedTour(steps || [], options, info.signal);
 
       case 'ask_clarification':
         return await executeAskClarification(action.question!, action.options!, options);
@@ -134,7 +162,7 @@ async function executeAction(
 /**
  * Navigate to a page within the SPA
  */
-async function executeNavigate(targetPage: string, options: Required<ExecutionOptions>): Promise<ToolResult> {
+async function executeNavigate(targetPage: string, options: Required<ExecutionOptions>, info: StepInfo): Promise<ToolResult> {
   options.onProgress(`navigate:${targetPage}`, 'executing');
 
   if (/^[a-z][a-z0-9+.-]*:/i.test(targetPage) || targetPage.startsWith('//')) {
@@ -145,7 +173,8 @@ async function executeNavigate(targetPage: string, options: Required<ExecutionOp
 
   const link = document.querySelector<HTMLElement>(`[data-ghost-nav="${CSS.escape(targetPage)}"], [data-ghost-nav="${CSS.escape(path)}"]`);
   if (link) {
-    await animateCursorTo(link, options.onCursorMove);
+    await animateCursorTo(link, options, info);
+    if (info.signal.aborted) return cancelledResult();
     link.click();
   } else {
     window.history.pushState({}, '', path);
@@ -164,7 +193,7 @@ async function executeNavigate(targetPage: string, options: Required<ExecutionOp
 /**
  * Click an element
  */
-async function executeClick(targetId: string, options: Required<ExecutionOptions>): Promise<ToolResult> {
+async function executeClick(targetId: string, options: Required<ExecutionOptions>, info: StepInfo): Promise<ToolResult> {
   options.onProgress(`click:${targetId}`, 'executing');
 
   const resolution = await resolveTargetWithCascade(targetId, {
@@ -185,7 +214,8 @@ async function executeClick(targetId: string, options: Required<ExecutionOptions
     return { id: crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options.onCursorMove);
+  await animateCursorTo(freshElement, options, info);
+  if (info.signal.aborted) return cancelledResult();
   freshElement.click();
 
   options.onProgress(`click:${targetId}`, 'completed');
@@ -198,7 +228,8 @@ async function executeClick(targetId: string, options: Required<ExecutionOptions
 async function executeFillInput(
   targetId: string,
   value: string | number | boolean,
-  options: Required<ExecutionOptions>
+  options: Required<ExecutionOptions>,
+  info: StepInfo
 ): Promise<ToolResult> {
   options.onProgress(`fill:${targetId}`, 'executing');
 
@@ -224,7 +255,8 @@ async function executeFillInput(
     return { id: crypto.randomUUID(), ok: false, error: `Target is not an input or textarea: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options.onCursorMove);
+  await animateCursorTo(freshElement, options, info);
+  if (info.signal.aborted) return cancelledResult();
 
   const stringValue = String(value);
   setNativeValue(freshElement, stringValue, { commitEvent: 'input' });
@@ -245,7 +277,8 @@ async function executeFillInput(
 async function executeSelectOption(
   targetId: string,
   value: string | number | boolean,
-  options: Required<ExecutionOptions>
+  options: Required<ExecutionOptions>,
+  info: StepInfo
 ): Promise<ToolResult> {
   options.onProgress(`select:${targetId}`, 'executing');
 
@@ -270,7 +303,8 @@ async function executeSelectOption(
     return { id: crypto.randomUUID(), ok: false, error: `Target is not a select element: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options.onCursorMove);
+  await animateCursorTo(freshElement, options, info);
+  if (info.signal.aborted) return cancelledResult();
 
   const stringValue = String(value);
   const success = setNativeSelectValue(freshElement, stringValue);
@@ -289,7 +323,8 @@ async function executeSelectOption(
 async function executeToggleSwitch(
   targetId: string,
   state: boolean,
-  options: Required<ExecutionOptions>
+  options: Required<ExecutionOptions>,
+  info: StepInfo
 ): Promise<ToolResult> {
   options.onProgress(`toggle:${targetId}`, 'executing');
 
@@ -314,7 +349,8 @@ async function executeToggleSwitch(
     return { id: crypto.randomUUID(), ok: false, error: `Target is not a checkbox or radio: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options.onCursorMove);
+  await animateCursorTo(freshElement, options, info);
+  if (info.signal.aborted) return cancelledResult();
 
   setNativeCheckboxState(freshElement, state);
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -434,7 +470,8 @@ export class ActionExecutor {
         this.isStopped = false;
         return { success: false, results, error: 'cancelled' };
       }
-      const result = await executeAction(actions[i], this.options, this.abortController.signal);
+      const info: StepInfo = { action: actions[i], index: i, total: actions.length, signal: this.abortController.signal };
+      const result = await executeAction(actions[i], this.options, info);
       result.id = actions[i].id ?? result.id;
       results.push(result);
       if (this.abortController.signal.aborted || this.isStopped) {

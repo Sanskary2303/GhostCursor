@@ -9,6 +9,26 @@ async function ask(page: Page, text: string) {
 }
 const approve = (page: Page) => page.getByRole('button', { name: 'Approve and Run' }).click();
 
+/** Records the overlay cursor's state, transform and opacity on every animation frame. */
+async function sampleCursor(page: Page) {
+  await page.evaluate(() => {
+    const w = window as any;
+    w.__gcSamples = [];
+    const tick = () => {
+      const host = document.getElementById('ghost-cursor-overlay');
+      const cur = host?.shadowRoot?.querySelector('.gc-main') as HTMLElement | null;
+      if (host && cur) {
+        const cs = getComputedStyle(cur);
+        w.__gcSamples.push({ state: host.getAttribute('data-gc-cursor-state'), transform: cs.transform, opacity: cs.opacity });
+      }
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+}
+type CursorSample = { state: string; transform: string; opacity: string };
+const cursorSamples = (page: Page): Promise<CursorSample[]> => page.evaluate(() => (window as any).__gcSamples);
+
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   const btn = page.getByRole('button', { name: 'Sign in (demo)' });
@@ -374,6 +394,22 @@ test('tour renders HTML as literal text and prevents XSS (S-13)', async ({ page 
   await expect(skipBtn).toBeVisible();
   await skipBtn.click();
   await expect(tooltip).not.toBeVisible();
+});
+
+test('cursor flies out of the dock along a curve and docks again', async ({ page }) => {
+  await page.goto('/');
+  await sampleCursor(page);
+  await ask(page, 'Turn on dark mode');
+  await approve(page);
+  await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+  await expect(page.locator('#ghost-cursor-overlay')).toHaveAttribute('data-gc-cursor-state', 'docked', { timeout: 10_000 });
+
+  const samples = await cursorSamples(page);
+  const flying = new Set(samples.filter(s => s.state === 'flying').map(s => s.transform));
+  expect(flying.size).toBeGreaterThanOrEqual(12);
+  expect(samples.some(s => s.state === 'returning')).toBe(true);
+  expect(samples[samples.length - 1].opacity).toBe('0');
+  await expect(page.locator('#ghost-cursor-canvas')).toHaveCount(0);
 });
 
 

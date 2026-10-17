@@ -98,7 +98,7 @@ export class TourEngine {
       height: 100vh;
       background: rgba(0, 0, 0, ${this.options.spotlightOpacity});
       pointer-events: none;
-      z-index: 99998;
+      z-index: 2147483350;
       display: none;
     `;
     this.state.shadowRoot.appendChild(this.state.overlayElement);
@@ -111,7 +111,7 @@ export class TourEngine {
       border-radius: 8px;
       box-shadow: 0 0 0 9999px rgba(0, 0, 0, ${this.options.spotlightOpacity});
       pointer-events: none;
-      z-index: 99999;
+      z-index: 2147483360;
       display: none;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       border: 3px solid ${this.options.spotlightColor};
@@ -128,7 +128,7 @@ export class TourEngine {
       background: white;
       border-radius: 12px;
       box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-      z-index: 100000;
+      z-index: 2147483370;
       display: none;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 14px;

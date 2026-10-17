@@ -104,5 +104,39 @@ describe('ActionExecutor', () => {
     expect(result.results[1].id).toBe('act-b');
     expect(result.results[1].error).toBe('cancelled by user');
   });
+
+  it('awaits onAim with step info before acting', async () => {
+    const btn = document.createElement('button');
+    btn.setAttribute('data-ghost-id', 'aim_btn');
+    document.body.appendChild(btn);
+    const order: string[] = [];
+    btn.addEventListener('click', () => order.push('click'));
+
+    const executor = new ActionExecutor({
+      timeout: 500,
+      onAim: async (el, info) => {
+        order.push(`aim ${info.index + 1}/${info.total} ${el === btn}`);
+        await new Promise(resolve => setTimeout(resolve, 30));
+        order.push('aim done');
+      },
+    });
+    const result = await executor.execute([{ id: 'a1', type: 'click', target_id: 'aim_btn' }]);
+    expect(result.success).toBe(true);
+    expect(order).toEqual(['aim 1/1 true', 'aim done', 'click']);
+  });
+
+  it('does not act when Stop is pressed during the flight', async () => {
+    const btn = document.createElement('button');
+    btn.setAttribute('data-ghost-id', 'stop_btn');
+    document.body.appendChild(btn);
+    const clicked = vi.fn();
+    btn.addEventListener('click', clicked);
+
+    const executor: ActionExecutor = new ActionExecutor({ timeout: 500, onAim: () => executor.stop() });
+    const result = await executor.execute([{ id: 's1', type: 'click', target_id: 'stop_btn' }]);
+    expect(result.success).toBe(false);
+    expect(result.results[0].error).toBe('cancelled by user');
+    expect(clicked).not.toHaveBeenCalled();
+  });
 });
 

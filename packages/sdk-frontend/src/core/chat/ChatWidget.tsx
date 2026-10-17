@@ -11,6 +11,8 @@ import { BRAND } from '../cursor/assets';
 import { prefersDarkScheme, resolveMode, tokensFor, tokensToCss } from '../theme/tokens';
 import { ACTION_ICONS, describeAction } from './describe';
 import type { Action } from '../types';
+import { INITIAL_WIDGET_STATE } from '../bridge';
+import type { Bridge, WidgetBridgeState } from '../bridge';
 
 export interface Message {
   id: string;
@@ -30,6 +32,7 @@ export interface ChatWidgetProps {
     position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
     mode?: ThemeMode;
   };
+  bridge?: Bridge<WidgetBridgeState>;
   requireApprovalForActions: boolean;
   onSendMessage: (message: string, context: any) => Promise<any>;
   onActionApproval: (actions: any[], token?: string) => Promise<any>;
@@ -50,6 +53,7 @@ export interface ChatWidgetState {
   unreadCount: number;
   context: any;
   error: string | null;
+  ui: WidgetBridgeState;
 }
 
 export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
@@ -65,12 +69,14 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     unreadCount: 0,
     context: this.props.initialContext,
     error: null as string | null,
+    ui: this.props.bridge?.get() ?? INITIAL_WIDGET_STATE,
   };
 
   private messagesEndRef = createRef<HTMLDivElement>();
   private inputRef = createRef<HTMLTextAreaElement>();
   private abortController: AbortController | null = null;
   private isStoppedByUser = false;
+  private unsubscribeBridge: (() => void) | null = null;
   private tokens: ThemeTokens = tokensFor(
     resolveMode(this.props.theme.mode, prefersDarkScheme()),
     this.props.theme.primaryColor,
@@ -81,6 +87,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.scrollToBottom();
     this.setupResizeListener();
     window.addEventListener('keydown', this.handleKeyDown);
+    this.unsubscribeBridge = this.props.bridge?.subscribe(ui => this.setState({ ui })) ?? null;
   }
 
   componentWillUnmount() {
@@ -115,6 +122,8 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private cleanup() {
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
+    this.unsubscribeBridge?.();
+    this.unsubscribeBridge = null;
     if (this.abortController) {
       this.abortController.abort();
     }
@@ -310,7 +319,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   };
 
   private dockState(): 'home' | 'away' {
-    return this.state.isExecutingActions ? 'away' : 'home';
+    return this.state.ui.cursorAway ? 'away' : 'home';
   }
 
   private idleState(): 'none' | 'thinking' | 'peeking' {
@@ -346,7 +355,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
         style={{
           position: 'fixed',
           ...positionStyle,
-          zIndex: 99999,
+          zIndex: 2147483200,
         }}
       >
         <style>{this.css}</style>

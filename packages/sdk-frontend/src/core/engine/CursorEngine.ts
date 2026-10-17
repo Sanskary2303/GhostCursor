@@ -24,6 +24,7 @@ function prefersReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+/** @deprecated Replaced by CursorController (core/cursor). The SDK no longer uses it; it will be removed in the next minor release. */
 export class CursorEngine {
   private canvas: HTMLCanvasElement | null = null;
   private ctx: CanvasRenderingContext2D | null = null;

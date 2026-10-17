@@ -2,8 +2,9 @@ import { h, render } from 'preact';
 import type { PageContext, Action, ToolResult, Target, PublicResponse } from './types';
 import { ContextProvider } from './context/ContextProvider';
 import { createTransport, TransportManager, Transport } from './transport/Transport';
-import { ActionExecutor, ExecutionOptions } from './executor/ActionExecutor';
-import { CursorEngine, getCursorEngine, disposeCursorEngine } from './engine/CursorEngine';
+import { ActionExecutor, type ExecutionResult } from './executor/ActionExecutor';
+import { CursorController, type CursorOutcome } from './cursor/CursorController';
+import { createBridge, INITIAL_WIDGET_STATE, type WidgetBridgeState } from './bridge';
 import { TourEngine } from './engine/TourEngine';
 import { ChatWidget, Message } from './chat/ChatWidget';
 import { resolveTargetWithCascade, registerTarget } from './dom-utils';
@@ -110,13 +111,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     requireApproval: requireApprovalForActions,
     allowSemanticLookup,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
-    onCursorMove: (element) => cursorEngine.moveTo(element),
-  });
-
-  const cursorEngine = getCursorEngine({
-    color: mergedTheme.cursorColor,
-    size: 24,
-    animationDuration: 500,
+    onAim: (element) => cursor.flyTo(element),
   });
 
   const tourEngine = new TourEngine({
@@ -147,6 +142,20 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   // Create shadow root for widget isolation (reuse if already present)
   const shadowRoot = widgetContainer.shadowRoot || widgetContainer.attachShadow({ mode: 'open' });
 
+  const widgetBridge = createBridge<WidgetBridgeState>({ ...INITIAL_WIDGET_STATE });
+  // Created now, mounted lazily on the first undock().
+  const cursor = new CursorController({
+    accent: mergedTheme.cursorColor,
+    getDockRect: () => {
+      const dock = shadowRoot.getElementById('gc-dock') ?? shadowRoot.getElementById('gc-launcher');
+      return dock ? dock.getBoundingClientRect() : null;
+    },
+    onStateChange: (state) => {
+      const away = state !== 'docked';
+      if (widgetBridge.get().cursorAway !== away) widgetBridge.set({ cursorAway: away });
+    },
+  });
+
   // State
   let isDisposed = false;
   let currentRunId: string | null = null;
@@ -162,6 +171,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     h(ChatWidget, {
       apiEndpoint: gatewayUrl,
       theme: mergedTheme,
+      bridge: widgetBridge,
       requireApprovalForActions,
       initialContext: { page: getPage(), values: {}, availableTargets: [] },
       onSendMessage: async (msg: string, ctx: any) => {
@@ -186,6 +196,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       },
       onStop: () => {
         actionExecutor.stop();
+        cursor.cancel();
       },
     }),
     shadowRoot
@@ -275,10 +286,25 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     if (isDisposed || !currentRunId || lastStatus !== 'awaiting_actions' || (token && token !== currentToken)) {
       throw new Error('This plan is out of date.');
     }
-    const execution = await actionExecutor.execute(actions);
+    const execution = await runWithCursor(actions);
     const res = await transportManager.continue('actions', { results: execution.results });
     rememberStatus(res);
     return res;
+  }
+
+  /** Undock, run the plan, then fly home while the results go to the server. */
+  async function runWithCursor(actions: Action[]): Promise<ExecutionResult> {
+    await cursor.undock();
+    let execution: ExecutionResult;
+    try {
+      execution = await actionExecutor.execute(actions);
+    } catch (error) {
+      void cursor.dock('error');
+      throw error;
+    }
+    const outcome: CursorOutcome = execution.success ? 'success' : execution.error === 'cancelled' ? 'stopped' : 'error';
+    void cursor.dock(outcome);
+    return execution;
   }
 
   /**
@@ -320,7 +346,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     contextProvider.destroy();
     transportManager.close();
     actionExecutor.dispose();
-    disposeCursorEngine();
+    cursor.dispose();
     render(null, shadowRoot);
 
     if (widgetContainer.parentNode && !mount) {

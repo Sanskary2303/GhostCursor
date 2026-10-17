@@ -299,6 +299,8 @@ async def test_session_lifecycle_and_message_projection(monkeypatch):
         session_id = sess_data["session_id"]
         assert sess_data["title"] == "Test E2E Session"
         assert "updated_at" in sess_data
+        assert sess_data["created_at"].endswith("+00:00")
+        assert sess_data["updated_at"].endswith("+00:00")
 
         # 2. Get messages - initially empty
         msg_res = await client_demo.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
@@ -327,6 +329,7 @@ async def test_session_lifecycle_and_message_projection(monkeypatch):
             assert set(m.keys()) == {"role", "content", "created_at"}
             assert m["role"] in ("user", "assistant")
             assert isinstance(m["content"], str)
+            assert m["created_at"].endswith("+00:00")
             assert "tool_calls" not in m
             assert "client_actions" not in m
 

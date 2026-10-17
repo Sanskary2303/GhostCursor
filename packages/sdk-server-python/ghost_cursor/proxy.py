@@ -851,6 +851,11 @@ class GhostCursorBackend:
                 await self.chat_store.append_messages(session_id, user_id, messages)
 
             user_turns = await self.chat_store.count_turns(session_id, user_id)
+            if user_turns == 1 and session and session.title == "New Conversation":
+                _, first_title = await self.chat_store.generate_summary_and_title(session_id, user_id)
+                await self.chat_store.update_session_metadata(
+                    session_id=session_id, user_id=user_id, title=first_title
+                )
             if user_turns > 0 and user_turns % 4 == 0:
                 task = asyncio.create_task(self.summarize_session(session_id, user_id))
                 self._background.add(task)

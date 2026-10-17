@@ -20,6 +20,7 @@ const app = express();
 const gateway = new Gateway({
   serviceUrl: process.env.GHOST_CURSOR_SERVICE_URL!,
   serviceKey: process.env.GHOST_CURSOR_API_KEY!,
+  tenantId: process.env.GHOST_CURSOR_TENANT_ID!,
   loadBrain: async (subject, context) => "# Platform Rules\nAlways confirm large orders.",
   requestTimeoutMs: 210_000, // optional: upstream request timeout in ms (default 210,000)
   toolTimeoutMs: 10_000,      // optional: tool execution timeout in ms (default 10,000)
@@ -41,6 +42,7 @@ app.post("/api/ghost-cursor", express.json({ limit: "64kb" }), requireAuth, chec
 
 - `serviceUrl` (`string`, required): URL of the Ghost Cursor hosted service (HTTPS or localhost HTTP).
 - `serviceKey` (`string`, required): API authentication key for upstream service.
+- `tenantId` (`string`, required): Tenant identifier for loopback signature verification and isolation.
 - `loadBrain` (`string` or `(subject, context) => Promise<string> | string`, required): Platform rules/brain prompt.
 - `capabilities` (`string[]` or `(subject) => Promise<string[]> | string[]`, optional): List of allowed capabilities.
 - `tools` (`Record<string, Tool>` or `Tool[]` or callback, optional): Customer backend tools.

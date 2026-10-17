@@ -176,9 +176,9 @@ class GeminiProvider(BaseVertexClient):
                     and len(summary) <= 300
                 ):
                     return title.strip(), summary.strip()
-            logger.warning(f"Invalid summary output from Gemini: {data}")
+            logger.warning("Invalid summary output from Gemini: %s", type(data).__name__)
         except Exception as e:
-            logger.warning(f"Gemini summarization failed, falling back to heuristic: {e}")
+            logger.warning("Gemini summarization failed, falling back to heuristic: %s", type(e).__name__)
 
         return await super().summarize(messages)
 

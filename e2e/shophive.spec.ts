@@ -166,7 +166,7 @@ test('typing card number on checkout does not leak to context.values or targets'
   await ask(page, 'Help with checkout');
   await expect(chat(page)).toBeVisible({ timeout: 20_000 });
 
-  expect(requests.length).toBeGreaterThan(0);
+  await expect.poll(() => requests.length, { timeout: 10_000 }).toBeGreaterThan(0);
   for (const req of requests) {
     const raw = JSON.stringify(req);
     expect(raw).not.toContain('4111222233334444');
@@ -198,7 +198,7 @@ test('typing ZIP code on checkout sends fresh context value', async ({ page }) =
   await ask(page, 'Help with checkout');
   await expect(chat(page)).toBeVisible({ timeout: 20_000 });
 
-  expect(requests.length).toBeGreaterThan(0);
+  await expect.poll(() => requests.length, { timeout: 10_000 }).toBeGreaterThan(0);
   expect(requests[0].context?.values?.['checkout.zip']).toBe('94105');
 });
 
@@ -545,6 +545,10 @@ test('chat history drawer and re-hydration on reload', async ({ page }) => {
   await expect(sessions.first()).toBeVisible({ timeout: 10_000 });
   expect(await sessions.count()).toBeGreaterThanOrEqual(1);
 
+  const mine = drawer.getByRole('button', { name: /What sizes are available/ }).first();
+  await expect(mine).toBeVisible({ timeout: 10_000 });
+  await expect(mine).toContainText(/Just now|\dm ago/);
+
   // "New chat" empties the log
   await page.getByRole('button', { name: 'New chat' }).click();
   await expect(drawer).not.toBeVisible();
@@ -554,7 +558,7 @@ test('chat history drawer and re-hydration on reload', async ({ page }) => {
   // Open history again and choose the old session
   await page.getByRole('button', { name: 'Chat history' }).click();
   await expect(drawer).toBeVisible();
-  await sessions.first().click();
+  await mine.click();
 
   // Choosing the old session brings the message back, and the plan approval panel is not shown (nothing is replayed)
   await expect(drawer).not.toBeVisible();

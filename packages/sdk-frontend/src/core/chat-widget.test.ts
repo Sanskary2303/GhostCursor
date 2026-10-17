@@ -368,6 +368,78 @@ describe('ChatWidget shell', () => {
     expect(msgs[0].textContent).toContain('What sizes are available?');
     expect(msgs[1].textContent).toContain('Size 10 and 11 are in stock.');
   });
+
+  it('clears stale session when messages(storedId) returns 404', async () => {
+    let selectedId: string | null = 'stale-session-id';
+    const history = {
+      list: async () => [],
+      create: async () => null,
+      messages: async () => {
+        throw new Error('HTTP 404');
+      },
+      current: () => selectedId,
+      select: (id: string | null) => {
+        selectedId = id;
+      },
+    };
+
+    const { root } = mount({ history });
+    await tick();
+    await tick();
+
+    expect(selectedId).toBeNull();
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const empty = root.querySelector('.gc-empty');
+    expect(empty).not.toBeNull();
+    expect(root.querySelectorAll('.gc-msg')).toHaveLength(0);
+  });
+
+  it('displays user-friendly message on HTTP 401 and clears error on subsequent send', async () => {
+    let shouldFail = true;
+    const { root } = mount({
+      onSendMessage: async () => {
+        if (shouldFail) {
+          throw new Error('HTTP 401');
+        }
+        return { reply: 'Welcome back!', status: 'completed', runId: 'r2', revision: 0 };
+      },
+    });
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const textarea = root.querySelector('textarea.gc-input') as HTMLTextAreaElement;
+    const form = root.querySelector('form.gc-composer') as HTMLFormElement;
+
+    textarea.value = 'Hello';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await tick();
+    await tick();
+
+    const msgs = root.querySelectorAll('.gc-msg');
+    expect(msgs).toHaveLength(2);
+    expect(msgs[1].textContent).toContain('Please sign in to use the assistant.');
+
+    // Next turn recovers and clears error
+    shouldFail = false;
+    textarea.value = 'Hello again';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+    await tick();
+    await tick();
+
+    const updatedMsgs = root.querySelectorAll('.gc-msg');
+    expect(updatedMsgs).toHaveLength(4);
+    expect(updatedMsgs[3].textContent).toContain('Welcome back!');
+  });
 });
 
 

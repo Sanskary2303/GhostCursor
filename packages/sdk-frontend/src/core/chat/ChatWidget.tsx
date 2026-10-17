@@ -141,7 +141,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     if (this.props.history) {
       const storedId = this.props.history.current();
       if (storedId) {
-        void this.loadSession(storedId, true);
+        void this.loadSession(storedId);
       }
     }
   }
@@ -212,10 +212,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private handleSelectSession = async (sessionId: string) => {
     this.setState({ drawerOpen: false, query: '' });
     this.props.history?.select(sessionId);
-    await this.loadSession(sessionId, false);
+    await this.loadSession(sessionId);
   };
 
-  private loadSession = async (sessionId: string, isInitial = false) => {
+  private loadSession = async (sessionId: string) => {
     if (!this.props.history) return;
     try {
       const rawMessages = await this.props.history.messages(sessionId);
@@ -235,6 +235,15 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       }, () => this.scrollToBottom());
     } catch (err) {
       console.warn('[GhostCursor] Failed to load session messages:', err);
+      if (err instanceof Error && err.message === 'HTTP 404') {
+        this.props.history.select(null);
+        this.setState({
+          messages: [],
+          hasRehydrated: false,
+          isLoading: false,
+        });
+        return;
+      }
       this.setState({ isLoading: false });
     }
   };
@@ -311,7 +320,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
     this.lastRequest = message;
-    this.setState({ inputValue: '', isLoading: true });
+    this.setState({ inputValue: '', isLoading: true, error: null });
 
     // Add user message
     this.addMessage({ role: 'user', content: message });
@@ -324,13 +333,16 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       const response = await this.props.onSendMessage(message, this.state.context);
       this.applyResponse(assistantMsg.id, response);
     } catch (error) {
+      const raw = error instanceof Error ? error.message : 'Unknown error';
+      const msgContent = raw === 'HTTP 401' ? 'Please sign in to use the assistant.' : `Error: ${raw}`;
+      const stateError = raw === 'HTTP 401' ? 'Please sign in to use the assistant.' : raw;
       this.setState(prev => ({
         messages: prev.messages.map(m =>
           m.id === assistantMsg.id
-            ? { ...m, content: `Error: ${error instanceof Error ? error.message : 'Unknown error'}`, isStreaming: false }
+            ? { ...m, content: msgContent, isStreaming: false }
             : m
         ),
-        error: error instanceof Error ? error.message : 'Unknown error',
+        error: stateError,
       }));
     } finally {
       this.setState({ isLoading: false });

@@ -46,7 +46,7 @@ export interface Tool {
 export interface GatewayOptions {
   serviceUrl: string;
   serviceKey: string;
-  tenantId?: string;
+  tenantId: string;
   loadBrain: ((subject: string, context: BrowserContext) => Promise<string> | string) | string;
   capabilities?: ((subject: string) => Promise<string[]> | string[]) | string[];
   tools?:
@@ -250,10 +250,11 @@ export class Gateway {
     if (!options) throw new Error("GatewayOptions are required");
     if (!options.serviceUrl) throw new Error("serviceUrl is required");
     if (!options.serviceKey) throw new Error("serviceKey is required");
+    if (!options.tenantId) throw new Error("tenantId is required");
 
     this.serviceUrl = validateServiceUrl(options.serviceUrl, options.insecureHttpHosts);
     this.serviceKey = options.serviceKey;
-    this.tenantId = options.tenantId || "shophive_demo";
+    this.tenantId = options.tenantId;
     this.loopbackKey = loopbackKey(this.serviceKey);
     this.loadBrain = options.loadBrain;
     this.capabilities = options.capabilities;

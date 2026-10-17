@@ -44,12 +44,24 @@ describe("Gateway URL Validation", () => {
     expect(() => validateServiceUrl("https://api.ghostcursor.ai?token=secret")).toThrow(/query parameters/);
     expect(() => validateServiceUrl("https://api.ghostcursor.ai#section")).toThrow(/fragment/);
   });
+
+  it("throws when tenantId is missing", () => {
+    expect(
+      () =>
+        new Gateway({
+          serviceUrl: "http://localhost:8080",
+          serviceKey: "test-key",
+          loadBrain: "# Brain",
+        } as any),
+    ).toThrow("tenantId is required");
+  });
 });
 
 describe("Gateway Request Validation", () => {
   const gateway = new Gateway({
     serviceUrl: "http://localhost:8080",
     serviceKey: "test-key-123",
+    tenantId: "shophive_demo",
     loadBrain: () => "# Brain Context",
   });
 
@@ -141,6 +153,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-secret-key",
+      tenantId: "shophive_demo",
       loadBrain: async () => "# Checkout rules",
       capabilities: ["fast_checkout"],
       fetch: mockFetch,
@@ -238,6 +251,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-secret-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       tools: {
         lookup_order: {
@@ -277,6 +291,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       fetch: mockFetch,
     });
@@ -311,6 +326,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       fetch: mockFetch,
     });
@@ -344,6 +360,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       fetch: mockFetch,
     });
@@ -398,6 +415,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       tools: {
         huge_tool: {
@@ -465,6 +483,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       fetch: mockFetch,
     });
@@ -501,6 +520,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       filterResponse: async (resp) => ({
         ...resp,
@@ -521,6 +541,7 @@ describe("Gateway Execution and Error Handling", () => {
     const badGateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       filterResponse: async (resp) => ({
         ...resp,
@@ -548,6 +569,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       fetch: mockFetch,
     });
@@ -581,6 +603,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       requestTimeoutMs: 50,
       fetch: hangingFetch,
@@ -641,6 +664,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       toolTimeoutMs: 50,
       tools: {
@@ -706,6 +730,7 @@ describe("Gateway Execution and Error Handling", () => {
     const gateway = new Gateway({
       serviceUrl: "http://localhost:8080",
       serviceKey: "test-key",
+      tenantId: "shophive_demo",
       loadBrain: "# Brain",
       tools: {
         strict_tool: {

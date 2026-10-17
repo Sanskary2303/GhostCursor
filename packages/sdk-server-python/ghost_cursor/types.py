@@ -3,8 +3,16 @@ Ghost Cursor Type Definitions
 """
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 @dataclass
@@ -17,6 +25,12 @@ class ChatSession:
     summary: Optional[str]
     created_at: datetime
     updated_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.created_at is not None:
+            self.created_at = _as_utc(self.created_at)
+        if self.updated_at is not None:
+            self.updated_at = _as_utc(self.updated_at)
 
     @property
     def metadata(self) -> Dict[str, Any]:
@@ -41,6 +55,10 @@ class ChatMessage:
     token_count: int
     created_at: datetime
     run_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if self.created_at is not None:
+            self.created_at = _as_utc(self.created_at)
 
     @property
     def metadata(self) -> Dict[str, Any]:

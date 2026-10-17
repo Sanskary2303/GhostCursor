@@ -2220,6 +2220,110 @@ async def test_gateway_loopback_signature_verification_and_tamper_rejection():
     assert "loopbackSignature" not in res
 
 
+from datetime import datetime, timezone
+from ghost_cursor.types import ChatSession, ChatMessage
+
+
+@pytest.mark.asyncio
+async def test_types_datetimes_always_utc():
+    """ChatSession and ChatMessage __post_init__ ensures tzinfo is timezone.utc even for naive datetimes."""
+    now_naive = datetime.now()
+    session = ChatSession(
+        session_id="s1",
+        tenant_id="t1",
+        user_id="u1",
+        title="Title",
+        summary=None,
+        created_at=now_naive,
+        updated_at=now_naive,
+    )
+    assert session.created_at.tzinfo == timezone.utc
+    assert session.updated_at.tzinfo == timezone.utc
+    assert session.metadata["created_at"].endswith("+00:00")
+    assert session.metadata["updated_at"].endswith("+00:00")
+
+    msg = ChatMessage(
+        message_id="m1",
+        session_id="s1",
+        role="user",
+        content="Hello",
+        tool_calls=[],
+        client_actions=[],
+        token_count=2,
+        created_at=now_naive,
+    )
+    assert msg.created_at.tzinfo == timezone.utc
+    assert msg.metadata["created_at"].endswith("+00:00")
+
+
+@pytest.mark.asyncio
+async def test_sql_alchemy_chat_store_returns_utc_datetimes(tmp_path):
+    """SQLAlchemyChatStore parsed datetimes have tzinfo == timezone.utc."""
+    db_file = tmp_path / "utc_test.db"
+    engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
+    store = SQLAlchemyChatStore(engine, tenant_id="tenant_utc")
+    await store.init_db()
+
+    session = await store.create_session("u_utc", "tenant_utc", "New Conversation")
+    assert session.created_at.tzinfo == timezone.utc
+    assert session.updated_at.tzinfo == timezone.utc
+    assert session.metadata["created_at"].endswith("+00:00")
+
+    await store.append_messages(session.session_id, "u_utc", [{
+        "role": "user",
+        "content": "Hi",
+        "token_count": 1,
+    }])
+
+    msgs = await store.get_messages(session.session_id, "u_utc")
+    assert len(msgs) == 1
+    assert msgs[0].created_at.tzinfo == timezone.utc
+    assert msgs[0].metadata["created_at"].endswith("+00:00")
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_first_turn_updates_heuristic_title_when_default():
+    """On first user turn when session title is 'New Conversation', title is updated to first 6 words without LLM call."""
+    store = InMemoryChatStore(tenant_id="tenant_first_title")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_first_title",
+    )
+    backend.attach_chat_store(store)
+
+    session = await store.create_session("u_1", "tenant_first_title", "New Conversation")
+    run_id = str(uuid.uuid4())
+
+    def mock_handler(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 0,
+            "status": "completed",
+            "reply": "We have sizes 9, 10, and 11.",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    res = await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session.session_id,
+        "message": "What sizes are available in store today please?",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "u_1")
+    assert res["status"] == "completed"
+
+    updated_session = await store.get_session(session.session_id, "u_1")
+    assert updated_session is not None
+    # First 6 words of "What sizes are available in store today please?"
+    assert updated_session.title == "What sizes are available in store"
+
+
 
 
 

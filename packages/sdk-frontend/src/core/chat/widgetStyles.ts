@@ -16,7 +16,7 @@ export const WIDGET_CSS = `
 .gc-dock[data-idle="peeking"] .gc-dock-cursor { animation: gc-peek 1.6s ease-in-out infinite; }
 .gc-title { flex: 1; min-width: 0; }
 .gc-wordmark { font-size: 13px; font-weight: 800; letter-spacing: .2em; line-height: 1.2; }
-.gc-tagline { font-size: 10.5px; font-weight: 600; letter-spacing: .12em; color: var(--gc-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gc-tagline { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--gc-muted); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .gc-status { display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 999px; background: var(--gc-surface-2); color: var(--gc-muted); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .gc-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--gc-success); }
 .gc-status[data-state="thinking"]::before, .gc-status[data-state="working"]::before { background: var(--gc-accent); animation: gc-pulse 1s ease-in-out infinite; }

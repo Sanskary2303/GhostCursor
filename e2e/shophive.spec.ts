@@ -103,6 +103,7 @@ test('dark mode', async ({ page }) => {
   await expect
     .poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor))
     .toBe('rgb(3, 7, 18)');
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('section')!).borderTopColor)).toBe('rgb(55, 65, 81)');
   await expect(chat(page)).toContainText('Theme switched to Dark Mode', { timeout: 20_000 });
 });
 

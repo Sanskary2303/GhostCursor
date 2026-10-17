@@ -17,6 +17,9 @@ html.dark .text-gray-900 { color: #f3f4f6; }
 html.dark .text-gray-700 { color: #d1d5db; }
 html.dark .text-gray-600,
 html.dark .text-gray-500 { color: #9ca3af; }
+html.dark .border-gray-100,
+html.dark .border-gray-200,
+html.dark .border-gray-300 { border-color: #374151; }
 html.dark input:not([type="checkbox"]):not([type="radio"]),
 html.dark select,
 html.dark textarea { background-color: #1f2937; color: #f3f4f6; border-color: #374151; }

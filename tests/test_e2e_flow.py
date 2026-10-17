@@ -298,7 +298,7 @@ async def test_session_lifecycle_and_message_projection(monkeypatch):
         sess_data = create_res.json()
         session_id = sess_data["session_id"]
         assert sess_data["title"] == "Test E2E Session"
-        assert "created_at" in sess_data
+        assert "updated_at" in sess_data
 
         # 2. Get messages - initially empty
         msg_res = await client_demo.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
@@ -336,24 +336,29 @@ async def test_session_lifecycle_and_message_projection(monkeypatch):
 
             other_get = await client_other.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
             assert other_get.status_code == 404
+            assert other_get.json()["detail"] == "not_found"
 
             other_del = await client_other.delete(f"/api/ghost-cursor/sessions/{session_id}")
             assert other_del.status_code == 404
+            assert other_del.json()["detail"] == "not_found"
 
         # 6. Invalid UUID format returns 404
         invalid_get = await client_demo.get("/api/ghost-cursor/sessions/not-a-valid-uuid/messages")
         assert invalid_get.status_code == 404
+        assert invalid_get.json()["detail"] == "not_found"
         invalid_del = await client_demo.delete("/api/ghost-cursor/sessions/not-a-valid-uuid")
         assert invalid_del.status_code == 404
+        assert invalid_del.json()["detail"] == "not_found"
 
         # 7. Delete session succeeds
         del_res = await client_demo.delete(f"/api/ghost-cursor/sessions/{session_id}")
         assert del_res.status_code == 200
-        assert del_res.json() == {"ok": True}
+        assert del_res.json() == {"deleted": True}
 
         # 8. Second delete returns 404
         del_res2 = await client_demo.delete(f"/api/ghost-cursor/sessions/{session_id}")
         assert del_res2.status_code == 404
+        assert del_res2.json()["detail"] == "not_found"
 
         # GET messages also returns 404 now
         msg_res3 = await client_demo.get(f"/api/ghost-cursor/sessions/{session_id}/messages")

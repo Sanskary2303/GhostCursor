@@ -223,30 +223,24 @@ SESSION_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 @ghost_router.post("/sessions", dependencies=[Depends(same_origin)])
 async def create_session(request: Request, user_id: str = Depends(require_user)):
-    """Create a new chat session"""
     await ensure_tables()
-    if not ghost.chat_store:
-        raise HTTPException(status_code=500, detail="chat_store_disabled")
+    title = "New Conversation"
     try:
         body = await request.json()
+        if isinstance(body, dict) and body.get("title"):
+            title = str(body["title"])[:255]
     except Exception:
-        body = {}
-    title = (body.get("title") if isinstance(body, dict) else None) or "New Conversation"
-    session_id = body.get("session_id") if isinstance(body, dict) else None
-    if session_id and not SESSION_ID.match(str(session_id)):
-        raise HTTPException(status_code=400, detail="invalid_session_id")
-    sess = await ghost.chat_store.create_session(
+        pass
+    s = await ghost.chat_store.create_session(
         user_id=user_id,
-        tenant_id=ghost.config.tenant_id,
-        title=str(title)[:255],
-        session_id=str(session_id) if session_id else None,
+        tenant_id=GHOST_CURSOR_TENANT_ID,
+        title=title,
     )
     return {
-        "session_id": sess.session_id,
-        "title": sess.title,
-        "summary": sess.summary,
-        "created_at": sess.created_at.isoformat() if hasattr(sess.created_at, "isoformat") else str(sess.created_at),
-        "updated_at": sess.updated_at.isoformat() if hasattr(sess.updated_at, "isoformat") else str(sess.updated_at),
+        "session_id": s.session_id,
+        "title": s.title,
+        "summary": s.summary,
+        "updated_at": s.updated_at.isoformat(),
     }
 
 
@@ -271,25 +265,25 @@ async def list_sessions(user_id: str = Depends(require_user)):
 
 
 @ghost_router.get("/sessions/{session_id}/messages")
-async def get_session_messages(session_id: str, user_id: str = Depends(require_user)):
-    """Get messages for a session (projected for client display)"""
+async def session_messages(
+    session_id: str, user_id: str = Depends(require_user)
+):
     if not SESSION_ID.match(session_id):
-        raise HTTPException(status_code=404, detail="session_not_found")
+        raise HTTPException(status_code=404, detail="not_found")
     await ensure_tables()
-    if not ghost.chat_store:
-        raise HTTPException(status_code=500, detail="chat_store_disabled")
-
-    session = await ghost.chat_store.get_session(session_id, user_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="session_not_found")
-
-    messages = await ghost.chat_store.get_messages(session_id, user_id)
+    if not await ghost.chat_store.get_session(session_id, user_id):
+        raise HTTPException(status_code=404, detail="not_found")
+    messages = await ghost.chat_store.get_messages(
+        session_id, user_id, limit=200
+    )
     return {
         "messages": [
             {
                 "role": m.role,
                 "content": m.content,
-                "created_at": m.created_at.isoformat() if hasattr(m.created_at, "isoformat") else str(m.created_at),
+                "created_at": (
+                    m.created_at.isoformat() if m.created_at else None
+                ),
             }
             for m in messages
             if m.role in ("user", "assistant")
@@ -297,19 +291,14 @@ async def get_session_messages(session_id: str, user_id: str = Depends(require_u
     }
 
 
-@ghost_router.delete("/sessions/{session_id}", dependencies=[Depends(same_origin)])
+@ghost_router.delete(
+    "/sessions/{session_id}", dependencies=[Depends(same_origin)]
+)
 async def delete_session(session_id: str, user_id: str = Depends(require_user)):
-    """Delete a user chat session"""
-    if not SESSION_ID.match(session_id):
-        raise HTTPException(status_code=404, detail="session_not_found")
     await ensure_tables()
-    if not ghost.chat_store:
-        raise HTTPException(status_code=500, detail="chat_store_disabled")
-
-    ok = await ghost.chat_store.delete_session(session_id, user_id)
-    if not ok:
-        raise HTTPException(status_code=404, detail="session_not_found")
-    return {"ok": True}
+    if not SESSION_ID.match(session_id) or not await ghost.chat_store.delete_session(session_id, user_id):
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"deleted": True}
 
 
 app.include_router(ghost_router)

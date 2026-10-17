@@ -354,7 +354,7 @@ export class TransportManager {
     });
   }
 
-  async start(message: string, context: any): Promise<PublicResponse> {
+  async start(message: string, context: any, sessionId?: string): Promise<PublicResponse> {
     const requestId = crypto.randomUUID();
 
     const request: BrowserRequest = {
@@ -363,6 +363,7 @@ export class TransportManager {
       requestId,
       message,
       context,
+      ...(sessionId ? { sessionId } : {}),
     };
 
     this.pendingRequestId = requestId;

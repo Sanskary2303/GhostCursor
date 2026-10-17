@@ -13,6 +13,15 @@ import { ACTION_ICONS, describeAction } from './describe';
 import type { Action } from '../types';
 import { INITIAL_WIDGET_STATE } from '../bridge';
 import type { Bridge, WidgetBridgeState } from '../bridge';
+import type { SessionSummary, HistoryMessage } from '../history';
+
+export interface HistoryProp {
+  list: () => Promise<SessionSummary[]>;
+  create: () => Promise<string | null>;
+  messages: (id: string) => Promise<HistoryMessage[]>;
+  current: () => string | null;
+  select: (id: string | null) => void;
+}
 
 export interface RunCardStep {
   label: string;
@@ -53,6 +62,7 @@ export interface ChatWidgetProps {
   onCancelApproval?: () => Promise<any>;
   onStop?: () => void;
   onShowMe?: (steps: { targetId: string; label: string }[]) => void;
+  history?: HistoryProp;
   initialContext: any;
 }
 
@@ -69,6 +79,26 @@ export interface ChatWidgetState {
   context: any;
   error: string | null;
   ui: WidgetBridgeState;
+  drawerOpen: boolean;
+  sessions: SessionSummary[];
+  query: string;
+  hasRehydrated?: boolean;
+}
+
+function formatRelativeTime(dateStr?: string): string {
+  if (!dateStr) return '';
+  const date = new Date(dateStr);
+  const now = Date.now();
+  const diffSec = Math.floor((now - date.getTime()) / 1000);
+  if (isNaN(diffSec) || diffSec < 0) return 'Just now';
+  if (diffSec < 60) return 'Just now';
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHour = Math.floor(diffMin / 60);
+  if (diffHour < 24) return `${diffHour}h ago`;
+  const diffDay = Math.floor(diffHour / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  return date.toLocaleDateString();
 }
 
 export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
@@ -85,6 +115,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     context: this.props.initialContext,
     error: null as string | null,
     ui: this.props.bridge?.get() ?? INITIAL_WIDGET_STATE,
+    drawerOpen: false,
+    sessions: [] as SessionSummary[],
+    query: '',
+    hasRehydrated: false,
   };
 
   private messagesEndRef = createRef<HTMLDivElement>();
@@ -104,6 +138,12 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.setupResizeListener();
     window.addEventListener('keydown', this.handleKeyDown);
     this.unsubscribeBridge = this.props.bridge?.subscribe(ui => this.setState({ ui })) ?? null;
+    if (this.props.history) {
+      const storedId = this.props.history.current();
+      if (storedId) {
+        void this.loadSession(storedId, true);
+      }
+    }
   }
 
   componentWillUnmount() {
@@ -131,10 +171,71 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
   private handleKeyDown = (e: KeyboardEvent) => {
     if (e.key !== 'Escape') return;
-    if (this.state.isExecutingActions) {
+    if (this.state.drawerOpen) {
+      this.setState({ drawerOpen: false, query: '' });
+    } else if (this.state.isExecutingActions) {
       this.handleStop();
     } else if (this.state.isOpen) {
       this.setState({ isOpen: false });
+    }
+  };
+
+  private toggleDrawer = async () => {
+    if (this.state.drawerOpen) {
+      this.setState({ drawerOpen: false, query: '' });
+      return;
+    }
+    this.setState({ drawerOpen: true, query: '' });
+    if (this.props.history) {
+      try {
+        const sessions = await this.props.history.list();
+        this.setState({ sessions });
+      } catch (err) {
+        console.warn('[GhostCursor] Failed to list sessions:', err);
+      }
+    }
+  };
+
+  private handleNewChat = () => {
+    this.props.history?.select(null);
+    this.setState({
+      drawerOpen: false,
+      query: '',
+      messages: [],
+      showActionApproval: false,
+      pendingActions: [],
+      error: null,
+      hasRehydrated: false,
+    });
+  };
+
+  private handleSelectSession = async (sessionId: string) => {
+    this.setState({ drawerOpen: false, query: '' });
+    this.props.history?.select(sessionId);
+    await this.loadSession(sessionId, false);
+  };
+
+  private loadSession = async (sessionId: string, isInitial = false) => {
+    if (!this.props.history) return;
+    try {
+      const rawMessages = await this.props.history.messages(sessionId);
+      const messages: Message[] = rawMessages.map(m => ({
+        id: crypto.randomUUID(),
+        role: m.role,
+        content: m.content,
+        timestamp: new Date(),
+      }));
+      this.setState({
+        messages,
+        isLoading: false,
+        showActionApproval: false,
+        pendingActions: [],
+        error: null,
+        hasRehydrated: messages.length > 0,
+      }, () => this.scrollToBottom());
+    } catch (err) {
+      console.warn('[GhostCursor] Failed to load session messages:', err);
+      this.setState({ isLoading: false });
     }
   };
 
@@ -417,6 +518,65 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     );
   }
 
+  private renderDrawer() {
+    const q = this.state.query.trim().toLowerCase();
+    const filtered = this.state.sessions.filter(s => {
+      if (!q) return true;
+      return (s.title && s.title.toLowerCase().includes(q)) || (s.summary && s.summary.toLowerCase().includes(q));
+    });
+
+    return (
+      <div className="gc-drawer" role="region" aria-label="Chat history">
+        <div className="gc-drawer-head">
+          <input
+            type="text"
+            className="gc-input gc-drawer-search"
+            placeholder="Search chats..."
+            value={this.state.query}
+            onInput={(e: any) => this.setState({ query: e.target.value })}
+            aria-label="Search chats"
+          />
+          <button
+            type="button"
+            className="gc-btn gc-btn--primary gc-drawer-new"
+            onClick={this.handleNewChat}
+          >
+            New chat
+          </button>
+        </div>
+        <div className="gc-drawer-list">
+          {filtered.length === 0 ? (
+            <div className="gc-drawer-empty">
+              {this.state.query ? 'No matching chats' : 'No previous chats'}
+            </div>
+          ) : (
+            filtered.map(s => {
+              const summaryLine = s.summary ? s.summary.split('\n')[0] : '';
+              const relTime = formatRelativeTime(s.updated_at);
+              const isCurrent = this.props.history?.current() === s.session_id;
+              return (
+                <button
+                  key={s.session_id}
+                  type="button"
+                  className={`gc-drawer-item${isCurrent ? ' gc-drawer-item--active' : ''}`}
+                  onClick={() => this.handleSelectSession(s.session_id)}
+                >
+                  <div className="gc-drawer-item-head">
+                    <span className="gc-drawer-item-title">{s.title || 'Untitled chat'}</span>
+                    {relTime && <span className="gc-drawer-item-time">{relTime}</span>}
+                  </div>
+                  {summaryLine && (
+                    <div className="gc-drawer-item-summary">{summaryLine}</div>
+                  )}
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    );
+  }
+
   private renderMissionBar() {
     const { ui, isExecutingActions } = this.state;
     const pct = ui.step ? Math.round((ui.step.index / ui.step.total) * 100) : 0;
@@ -486,6 +646,22 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   <div className="gc-tagline">{BRAND.tagline}</div>
                 </div>
                 <span className="gc-status" data-state={this.statusInfo().state}>{this.statusInfo().text}</span>
+                {this.props.history && (
+                  <button
+                    type="button"
+                    className="gc-icon-btn"
+                    onClick={this.toggleDrawer}
+                    aria-label="Chat history"
+                  >
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                      <polyline points="14 2 14 8 20 8" />
+                      <line x1="16" y1="13" x2="8" y2="13" />
+                      <line x1="16" y1="17" x2="8" y2="17" />
+                      <polyline points="10 9 9 9 8 9" />
+                    </svg>
+                  </button>
+                )}
                 <button type="button" className="gc-icon-btn" onClick={this.toggleChat} aria-label="Close chat">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
                     <line x1="18" y1="6" x2="6" y2="18" />
@@ -494,12 +670,18 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                 </button>
               </div>
 
+              {/* Drawer if open */}
+              {this.state.drawerOpen && this.renderDrawer()}
+
             {/* Messages */}
             <div
               role="log"
               aria-live="polite"
               className="gc-log"
             >
+              {this.state.hasRehydrated && messages.length > 0 && (
+                <div className="gc-divider">Earlier in this chat</div>
+              )}
               {messages.length === 0 ? (
                 <div className="gc-empty">
                   <div className="gc-empty-mark"><BrandCursor width={26} accent={this.tokens.accent} /></div>

@@ -2,7 +2,7 @@
 export const WIDGET_CSS = `
 .gc-root { font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: var(--gc-text); -webkit-font-smoothing: antialiased; }
 .gc-root *, .gc-root *::before, .gc-root *::after { box-sizing: border-box; }
-.gc-panel { width: 380px; max-width: calc(100vw - 48px); height: 520px; max-height: calc(100vh - 96px); display: flex; flex-direction: column; overflow: hidden; background: var(--gc-bg); color: var(--gc-text); border: 1px solid var(--gc-border); border-radius: 18px; box-shadow: var(--gc-shadow); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: height .3s ease, width .3s ease; }
+.gc-panel { position: relative; width: 380px; max-width: calc(100vw - 48px); height: 520px; max-height: calc(100vh - 96px); display: flex; flex-direction: column; overflow: hidden; background: var(--gc-bg); color: var(--gc-text); border: 1px solid var(--gc-border); border-radius: 18px; box-shadow: var(--gc-shadow); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); transition: height .3s ease, width .3s ease; }
 .gc-header { display: flex; align-items: center; gap: 12px; padding: 14px 14px 14px 16px; background: var(--gc-surface); border-bottom: 1px dashed var(--gc-accent-line); }
 .gc-dock { position: relative; flex: 0 0 40px; width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; background: var(--gc-dock-bg); box-shadow: inset 0 0 0 1px rgba(255,255,255,.06), inset 0 4px 10px rgba(0,0,0,.45); }
 .gc-dock::after { content: ""; position: absolute; inset: -4px; border-radius: 50%; border: 1px dashed var(--gc-accent); animation: gc-spin 12s linear infinite; pointer-events: none; }
@@ -96,7 +96,22 @@ export const WIDGET_CSS = `
 .gc-card-step--skipped { color: var(--gc-muted); }
 .gc-card-text { flex: 1; min-width: 0; }
 .gc-card-why { font-size: 11.5px; color: var(--gc-muted); margin-top: 2px; }
-.gc-card-actions { display: flex; gap: 8px; padding: 8px 12px 12px; }
+.gc-drawer { position: absolute; top: 69px; left: 0; right: 0; bottom: 0; background: var(--gc-bg); z-index: 20; display: flex; flex-direction: column; overflow: hidden; animation: ghost-fade-in .2s ease-out; }
+.gc-drawer-head { display: flex; gap: 8px; padding: 12px 14px; border-bottom: 1px dashed var(--gc-accent-line); background: var(--gc-surface); }
+.gc-drawer-search { flex: 1; height: 38px; min-height: 38px; padding: 8px 12px; font-size: 13px; }
+.gc-drawer-new { flex: 0 0 auto; height: 38px; padding: 0 14px; font-size: 13px; white-space: nowrap; }
+.gc-drawer-list { flex: 1; overflow-y: auto; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.gc-drawer-empty { margin: auto 0; padding: 20px; text-align: center; color: var(--gc-muted); font-size: 13px; }
+.gc-drawer-item { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--gc-border); background: var(--gc-surface); color: var(--gc-text); text-align: left; font: inherit; cursor: pointer; transition: background .15s ease, border-color .15s ease; }
+.gc-drawer-item:hover { border-color: var(--gc-accent); background: var(--gc-accent-soft); }
+.gc-drawer-item:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 2px; }
+.gc-drawer-item--active { border-color: var(--gc-accent); }
+.gc-drawer-item-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.gc-drawer-item-title { font-size: 13px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+.gc-drawer-item-time { font-size: 11px; color: var(--gc-muted); white-space: nowrap; }
+.gc-drawer-item-summary { font-size: 12px; color: var(--gc-muted); line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gc-divider { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 12px 0 6px; color: var(--gc-muted); font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
+.gc-divider::before, .gc-divider::after { content: ""; flex: 1; height: 1px; background: var(--gc-border); }
 .gc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @keyframes gc-spin { to { transform: rotate(360deg); } }
 @keyframes gc-float { 0%, 100% { transform: translate(2px, 1px); } 50% { transform: translate(2px, -1px); } }

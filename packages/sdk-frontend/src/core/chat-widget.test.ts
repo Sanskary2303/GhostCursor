@@ -287,5 +287,87 @@ describe('ChatWidget shell', () => {
       { targetId: 'cart.step3', label: 'Click step3' },
     ]);
   });
+
+  it('renders history button and opens drawer to list sessions and filter by query', async () => {
+    const mockSessions = [
+      { session_id: '11111111-1111-1111-1111-111111111111', title: 'Sneakers Search', summary: 'Looking for Nike shoes', updated_at: '2026-10-17T12:00:00Z' },
+      { session_id: '22222222-2222-2222-2222-222222222222', title: 'Order Tracking', summary: 'Where is SH-1024', updated_at: '2026-10-17T14:00:00Z' },
+    ];
+    let selectedId: string | null = 'initial';
+
+    const history = {
+      list: async () => mockSessions,
+      create: async () => '33333333-3333-3333-3333-333333333333',
+      messages: async () => [],
+      current: () => selectedId,
+      select: (id: string | null) => { selectedId = id; },
+    };
+
+    const { root } = mount({ history });
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const histBtn = root.querySelector('button[aria-label="Chat history"]') as HTMLButtonElement;
+    expect(histBtn).not.toBeNull();
+
+    // Open drawer
+    histBtn.click();
+    await tick();
+
+    const drawer = root.querySelector('.gc-drawer');
+    expect(drawer).not.toBeNull();
+
+    const items = drawer!.querySelectorAll('.gc-drawer-item');
+    expect(items).toHaveLength(2);
+    expect(items[0].textContent).toContain('Sneakers Search');
+    expect(items[1].textContent).toContain('Order Tracking');
+
+    // Filter by query
+    const searchInput = drawer!.querySelector('.gc-drawer-search') as HTMLInputElement;
+    searchInput.value = 'order';
+    searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    const filteredItems = drawer!.querySelectorAll('.gc-drawer-item');
+    expect(filteredItems).toHaveLength(1);
+    expect(filteredItems[0].textContent).toContain('Order Tracking');
+
+    // Escape closes the drawer first while panel remains open
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await tick();
+    expect(root.querySelector('.gc-drawer')).toBeNull();
+    expect(root.querySelector('.ghost-chat-panel')).not.toBeNull();
+  });
+
+  it('re-hydrates messages on mount and displays Earlier in this chat divider', async () => {
+    const history = {
+      list: async () => [],
+      create: async () => null,
+      messages: async () => [
+        { role: 'user' as const, content: 'What sizes are available?' },
+        { role: 'assistant' as const, content: 'Size 10 and 11 are in stock.' },
+      ],
+      current: () => '11111111-1111-1111-1111-111111111111',
+      select: () => {},
+    };
+
+    const { root } = mount({ history });
+    await tick();
+    await tick();
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const divider = root.querySelector('.gc-divider');
+    expect(divider).not.toBeNull();
+    expect(divider!.textContent).toBe('Earlier in this chat');
+
+    const msgs = root.querySelectorAll('.gc-msg');
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0].textContent).toContain('What sizes are available?');
+    expect(msgs[1].textContent).toContain('Size 10 and 11 are in stock.');
+  });
 });
+
 

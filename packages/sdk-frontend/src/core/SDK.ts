@@ -11,6 +11,32 @@ import { resolveTargetWithCascade, registerTarget } from './dom-utils';
 import { BRAND } from './cursor/assets';
 import type { ThemeMode } from './theme/tokens';
 import { describeAction } from './chat/describe';
+import { createHistoryClient } from './history';
+
+const SESSION_STORAGE_KEY = 'ghost-cursor.session';
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function getStoredSessionId(): string | null {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      const id = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      return id && UUID_REGEX.test(id) ? id : null;
+    }
+  } catch {}
+  return null;
+}
+
+function setStoredSessionId(id: string | null): void {
+  try {
+    if (typeof sessionStorage !== 'undefined') {
+      if (id) {
+        sessionStorage.setItem(SESSION_STORAGE_KEY, id);
+      } else {
+        sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+    }
+  } catch {}
+}
 
 export interface GhostCursorSDK {
   dispose(): void;
@@ -240,6 +266,23 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     currentRunId = TERMINAL_STATUSES.has(res.status) ? null : res.runId;
   }
 
+  const historyClient = createHistoryClient(gatewayUrl, headers);
+  let currentSessionId: string | null = getStoredSessionId();
+
+  async function ensureSession(): Promise<string | null> {
+    if (currentSessionId) return currentSessionId;
+    try {
+      const newId = await historyClient.create();
+      if (newId) {
+        currentSessionId = newId;
+        setStoredSessionId(newId);
+      }
+    } catch (err) {
+      console.warn('[GhostCursor] Failed to create session:', err);
+    }
+    return currentSessionId;
+  }
+
   // Render Preact ChatWidget into shadow root
   render(
     h(ChatWidget, {
@@ -248,6 +291,18 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       bridge: widgetBridge,
       requireApprovalForActions,
       initialContext: { page: getPage(), values: {}, availableTargets: [] },
+      history: {
+        list: () => historyClient.list(),
+        create: () => historyClient.create(),
+        messages: (id: string) => historyClient.messages(id),
+        current: () => currentSessionId,
+        select: (id: string | null) => {
+          currentSessionId = id;
+          setStoredSessionId(id);
+          currentRunId = null;
+          lastStatus = null;
+        },
+      },
       onSendMessage: async (msg: string, ctx: any) => {
         const rawCtx = contextProvider.captureContext();
         const pageContext = {
@@ -255,9 +310,13 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
           values: rawCtx?.values ?? {},
           availableTargets: rawCtx?.availableTargets ?? [],
         };
-        const res = currentRunId && lastStatus === 'awaiting_answer'
-          ? await transportManager.continue('answer', { answer: msg })
-          : await transportManager.start(msg, pageContext);
+        let res: PublicResponse;
+        if (currentRunId && lastStatus === 'awaiting_answer') {
+          res = await transportManager.continue('answer', { answer: msg });
+        } else {
+          const sid = await ensureSession();
+          res = await transportManager.start(msg, pageContext, sid ?? undefined);
+        }
         rememberStatus(res);
         return res;
       },
@@ -349,9 +408,13 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       availableTargets: rawCtx?.availableTargets ?? [],
     };
 
-    const res = currentRunId && lastStatus === 'awaiting_answer'
-      ? await transportManager.continue('answer', { answer: message })
-      : await transportManager.start(message, pageContext);
+    let res: PublicResponse;
+    if (currentRunId && lastStatus === 'awaiting_answer') {
+      res = await transportManager.continue('answer', { answer: message });
+    } else {
+      const sid = await ensureSession();
+      res = await transportManager.start(message, pageContext, sid ?? undefined);
+    }
     rememberStatus(res);
   }
 

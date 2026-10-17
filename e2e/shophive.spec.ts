@@ -520,6 +520,48 @@ test('track my return: 3-step tour starting at the Orders tab', async ({ page })
   await expect(chat(page)).toContainText('track an order or a return', { timeout: 20_000 });
 });
 
+test('chat history drawer and re-hydration on reload', async ({ page }) => {
+  await page.goto('/');
+  await ask(page, 'What sizes are available?');
+  await expect(chat(page)).toContainText("US Men's sizes", { timeout: 20_000 });
+
+  // Reload the page
+  await page.reload();
+
+  // Reopen the chat
+  await page.getByRole('button', { name: 'Open Ghost Cursor chat' }).click();
+
+  // The earlier user message is shown after reopening the chat
+  await expect(chat(page)).toContainText('What sizes are available?', { timeout: 10_000 });
+  await expect(chat(page)).toContainText('Earlier in this chat');
+
+  // Open "Chat history"
+  await page.getByRole('button', { name: 'Chat history' }).click();
+  const drawer = page.locator('.gc-drawer');
+  await expect(drawer).toBeVisible();
+
+  // At least 1 session is listed
+  const sessions = drawer.locator('.gc-drawer-item');
+  await expect(sessions.first()).toBeVisible({ timeout: 10_000 });
+  expect(await sessions.count()).toBeGreaterThanOrEqual(1);
+
+  // "New chat" empties the log
+  await page.getByRole('button', { name: 'New chat' }).click();
+  await expect(drawer).not.toBeVisible();
+  await expect(chat(page).locator('.gc-msg')).toHaveCount(0);
+  await expect(chat(page).locator('.gc-empty')).toBeVisible();
+
+  // Open history again and choose the old session
+  await page.getByRole('button', { name: 'Chat history' }).click();
+  await expect(drawer).toBeVisible();
+  await sessions.first().click();
+
+  // Choosing the old session brings the message back, and the plan approval panel is not shown (nothing is replayed)
+  await expect(drawer).not.toBeVisible();
+  await expect(chat(page)).toContainText('What sizes are available?', { timeout: 10_000 });
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).not.toBeVisible();
+});
+
 test.describe('reduced motion', () => {
   test.use({ reducedMotion: 'reduce' as any, contextOptions: { reducedMotion: 'reduce' } });
 

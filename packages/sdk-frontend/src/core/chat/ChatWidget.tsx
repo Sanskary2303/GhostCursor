@@ -4,6 +4,11 @@
  */
 
 import { h, Component, createRef } from 'preact';
+import type { ThemeMode, ThemeTokens } from '../theme/tokens';
+import { BrandCursor } from './BrandCursor';
+import { WIDGET_CSS } from './widgetStyles';
+import { BRAND } from '../cursor/assets';
+import { prefersDarkScheme, resolveMode, tokensFor, tokensToCss } from '../theme/tokens';
 
 export interface Message {
   id: string;
@@ -21,6 +26,7 @@ export interface ChatWidgetProps {
     primaryColor: string;
     cursorColor: string;
     position: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+    mode?: ThemeMode;
   };
   requireApprovalForActions: boolean;
   onSendMessage: (message: string, context: any) => Promise<any>;
@@ -63,6 +69,11 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private inputRef = createRef<HTMLTextAreaElement>();
   private abortController: AbortController | null = null;
   private isStoppedByUser = false;
+  private tokens: ThemeTokens = tokensFor(
+    resolveMode(this.props.theme.mode, prefersDarkScheme()),
+    this.props.theme.primaryColor,
+  );
+  private css = tokensToCss(this.tokens) + WIDGET_CSS;
 
   componentDidMount() {
     this.scrollToBottom();
@@ -110,7 +121,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private scrollToBottom = () => {
     const reduced = typeof window !== 'undefined' && window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     setTimeout(() => {
-      this.messagesEndRef.current?.scrollIntoView({ behavior: reduced ? 'auto' : 'smooth' });
+      this.messagesEndRef.current?.scrollIntoView?.({ behavior: reduced ? 'auto' : 'smooth' });
     }, 100);
   };
 
@@ -296,6 +307,22 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.setState({ inputValue: target.value });
   };
 
+  private dockState(): 'home' | 'away' {
+    return this.state.isExecutingActions ? 'away' : 'home';
+  }
+
+  private idleState(): 'none' | 'thinking' | 'peeking' {
+    if (this.state.isLoading && !this.state.isExecutingActions) return 'thinking';
+    if (this.state.showActionApproval) return 'peeking';
+    return 'none';
+  }
+
+  private statusInfo(): { state: 'online' | 'thinking' | 'working'; text: string } {
+    if (this.state.isExecutingActions) return { state: 'working', text: 'Working…' };
+    if (this.state.isLoading) return { state: 'thinking', text: 'Thinking…' };
+    return { state: 'online', text: 'Online' };
+  }
+
   render() {
     const { isOpen, messages, inputValue, isLoading, isExecutingActions, unreadCount, showActionApproval, pendingActions, error } = this.state;
     const { theme, requireApprovalForActions } = this.props;
@@ -313,6 +340,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     return (
       <div
         id="ghost-cursor-widget"
+        className="gc-root"
         style={{
           position: 'fixed',
           ...positionStyle,
@@ -320,71 +348,29 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
+        <style>{this.css}</style>
         {isOpen ? (
-          <div
-            className="ghost-chat-panel"
-            style={{
-              width: '380px',
-              maxWidth: 'calc(100vw - 48px)',
-              height: '500px',
-              maxHeight: 'calc(100vh - 96px)',
-              background: 'white',
-              borderRadius: '16px',
-              boxShadow: '0 20px 60px rgba(0, 0, 0, 0.15)',
-              display: 'flex',
-              flexDirection: 'column',
-              overflow: 'hidden',
-              border: '1px solid #e5e7eb',
-            }}
-          >
+          <div className="ghost-chat-panel gc-panel">
             {/* Header */}
-            <div style={{
-              padding: '16px 20px',
-              background: theme.primaryColor,
-              color: 'white',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <div style={{
-                  width: '32px', height: '32px',
-                  borderRadius: '50%',
-                  background: 'rgba(255,255,255,0.2)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}>
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2">
-                    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                    <circle cx="9" cy="7" r="4"></circle>
-                    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-                  </svg>
-                </div>
-                <div>
-                  <div style={{ fontWeight: 600, fontSize: '15px' }}>Ghost Cursor</div>
-                  <div style={{ fontSize: '12px', opacity: 0.8 }}>AI Co-pilot</div>
-                </div>
-              </div>
-              <button
-                onClick={this.toggleChat}
-                style={{
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'white',
-                  cursor: 'pointer',
-                  padding: '8px',
-                  borderRadius: '8px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                }}
-                aria-label="Close chat"
+            <div className="gc-header">
+              <div
+                id="gc-dock"
+                className="gc-dock"
+                data-state={this.dockState()}
+                data-idle={this.idleState()}
               >
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <line x1="18" y1="6" x2="6" y2="18"></line>
-                  <line x1="6" y1="6" x2="18" y2="18"></line>
+                <BrandCursor width={22} accent={this.tokens.accent} className="gc-dock-cursor" />
+                <span className="gc-dock-ghost" aria-hidden="true" />
+              </div>
+              <div className="gc-title">
+                <div className="gc-wordmark">{BRAND.wordmark}</div>
+                <div className="gc-tagline">{BRAND.tagline}</div>
+              </div>
+              <span className="gc-status" data-state={this.statusInfo().state}>{this.statusInfo().text}</span>
+              <button type="button" className="gc-icon-btn" onClick={this.toggleChat} aria-label="Close chat">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
                 </svg>
               </button>
             </div>
@@ -525,51 +511,16 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
           </div>
         ) : (
           <button
+            type="button"
+            id="gc-launcher"
+            className="gc-launcher"
+            data-state={this.dockState()}
             onClick={this.toggleChat}
-            style={{
-              position: 'relative',
-              width: '56px',
-              height: '56px',
-              borderRadius: '28px',
-              background: theme.primaryColor || '#0052FF',
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              boxShadow: '0 4px 20px rgba(0, 0, 0, 0.25)',
-              transition: 'transform 0.2s, box-shadow 0.2s',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.transform = 'scale(1.08)')}
-            onMouseLeave={e => (e.currentTarget.style.transform = 'scale(1)')}
             aria-label="Open Ghost Cursor chat"
           >
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-            </svg>
-            {unreadCount > 0 && (
-              <span
-                style={{
-                  position: 'absolute',
-                  top: '-2px',
-                  right: '-2px',
-                  background: '#ef4444',
-                  color: 'white',
-                  borderRadius: '10px',
-                  minWidth: '20px',
-                  height: '20px',
-                  fontSize: '11px',
-                  fontWeight: 'bold',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  padding: '0 4px',
-                  border: '2px solid white',
-                }}
-              >
-                {unreadCount}
-              </span>
-            )}
+            <span className="gc-launcher-ring" aria-hidden="true" />
+            <BrandCursor width={26} accent={this.tokens.accent} className="gc-launcher-cursor" />
+            {unreadCount > 0 && <span className="gc-badge">{unreadCount}</span>}
           </button>
         )}
       </div>

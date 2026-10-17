@@ -167,23 +167,24 @@ export function setNativeCheckboxState(
     throw new Error('Element is not a checkbox or radio');
   }
 
-  if (element.checked !== checked) {
-    // Use native setter for checked property
-    const nativeCheckedSetter = Object.getOwnPropertyDescriptor(
-      HTMLInputElement.prototype,
-      'checked'
-    )?.set;
+  if (element.checked === checked) return;
 
-    if (nativeCheckedSetter) {
-      nativeCheckedSetter.call(element, checked);
-    } else {
-      element.checked = checked;
-    }
-
-    // Dispatch events
-    element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
-    element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
+  // A real click is what React, Vue and plain listeners expect for checkboxes:
+  // the browser flips `checked` and fires click -> input -> change by itself.
+  if (element.type === 'checkbox' || checked) {
+    element.click();
+    return;
   }
+
+  // Unchecking a radio can't be done with a click, so set it natively.
+  const nativeCheckedSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'checked')?.set;
+  if (nativeCheckedSetter) {
+    nativeCheckedSetter.call(element, false);
+  } else {
+    element.checked = false;
+  }
+  element.dispatchEvent(new Event('input', { bubbles: true, cancelable: true }));
+  element.dispatchEvent(new Event('change', { bubbles: true, cancelable: true }));
 }
 
 /**

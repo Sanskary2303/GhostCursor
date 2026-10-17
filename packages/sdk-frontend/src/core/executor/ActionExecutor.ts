@@ -317,6 +317,13 @@ async function executeToggleSwitch(
   await animateCursorTo(freshElement, options.onCursorMove);
 
   setNativeCheckboxState(freshElement, state);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const after = document.body.contains(freshElement)
+    ? freshElement
+    : reResolveElement(targetId, { allowSemanticLookup: options.allowSemanticLookup });
+  if (!(after instanceof HTMLInputElement) || after.checked !== state) {
+    return { id: crypto.randomUUID(), ok: false, error: `Switch did not change: ${targetId}` };
+  }
 
   options.onProgress(`toggle:${targetId}`, 'completed');
   return { id: crypto.randomUUID(), ok: true, output: { toggled: targetId, state } };

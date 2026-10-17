@@ -104,7 +104,7 @@ async def test_create_run_awaiting_actions(auth_headers):
         assert data["status"] == "awaiting_actions"
         assert data["revision"] == 0
         assert len(data["actions"]) > 0
-        assert any(a.get("target_id") == "theme.dark" for a in data["actions"])
+        assert any(a.get("type") == "toggle_switch" and a.get("target_id") == "theme.toggle" for a in data["actions"])
 
 
 @pytest.mark.asyncio
@@ -232,7 +232,7 @@ async def test_continue_with_action_results(auth_headers):
         assert cont_res.status_code == 200
         cont_data = cont_res.json()
         assert cont_data["status"] == "completed"
-        assert "executed successfully" in cont_data["reply"].lower()
+        assert "theme switched to dark mode" in cont_data["reply"].lower()
 
 
 @pytest.mark.asyncio

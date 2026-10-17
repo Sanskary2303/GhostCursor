@@ -26,6 +26,7 @@ export interface Theme {
   primaryColor?: string;
   cursorColor?: string;
   position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+  mode?: 'midnight' | 'daylight' | 'auto';
   [key: string]: any;
 }
 

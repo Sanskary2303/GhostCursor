@@ -3,9 +3,9 @@
 This page manages user preferences and notification settings.
 
 ## Appearance
-- Light mode: Default theme with light background
-- Dark mode: Dark background for low-light environments
-- Theme preference saved across devices
+- Dark mode switch (target `theme.toggle`): ON = dark theme, OFF = light theme (default).
+- To change the theme: navigate to `settings`, then use `toggle_switch` on `theme.toggle`.
+- The choice is remembered in this browser.
 
 ## Notification Preferences
 - Email: Receive order updates, promotions, and newsletters

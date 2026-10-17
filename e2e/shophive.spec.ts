@@ -31,7 +31,7 @@ test('add to cart waits for approval, then changes React state', async ({ page }
   await approve(page);
   await expect(page).toHaveURL(/\/product\/air-max-90$/);
   await expect(page.getByRole('link', { name: 'Cart (1)' })).toBeVisible({ timeout: 20_000 });
-  await expect(chat(page)).toContainText('executed successfully', { timeout: 20_000 });
+  await expect(chat(page)).toContainText('Added the Air Max 90', { timeout: 20_000 });
 });
 
 test('order lookup uses the private backend tool', async ({ page }) => {
@@ -70,14 +70,20 @@ test('tracking question runs a tour on the orders page', async ({ page }) => {
   await expect(nextBtn).toHaveText('Finish');
   await nextBtn.click();
 
-  await expect(chat(page)).toContainText('executed successfully', { timeout: 30_000 });
+  await expect(chat(page)).toContainText('track an order', { timeout: 30_000 });
 });
 
 test('dark mode', async ({ page }) => {
   await page.goto('/');
   await ask(page, 'Turn on dark mode');
   await approve(page);
-  await expect(page.locator('[data-ghost-id="theme.dark"]')).toHaveClass(/bg-blue-50/, { timeout: 20_000 });
+  await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+  await expect(page.locator('html')).toHaveClass(/dark/);
+  // The body background has a 0.3 s transition, so poll until it settles.
+  await expect
+    .poll(() => page.evaluate(() => getComputedStyle(document.body).backgroundColor))
+    .toBe('rgb(3, 7, 18)');
+  await expect(chat(page)).toContainText('Theme switched to Dark Mode', { timeout: 20_000 });
 });
 
 test('browser only talks to its own gateway and gets a public envelope', async ({ page }) => {
@@ -284,7 +290,7 @@ test('new message clears previous approval panel and prevents running stale plan
   await ask(page, 'Turn on dark mode');
   await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 10_000 });
   await approve(page);
-  await expect(page.locator('[data-ghost-id="theme.dark"]')).toHaveClass(/bg-blue-50/, { timeout: 20_000 });
+  await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
 });
 
 test('cancel button cancels the plan and notifies server', async ({ page }) => {

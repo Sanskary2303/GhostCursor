@@ -84,7 +84,7 @@ async def test_e2e_action_planning_flow(monkeypatch):
         assert cont_response.status_code == 200
         cont_data = cont_response.json()
         assert cont_data["status"] == "completed"
-        assert "executed successfully" in cont_data["reply"].lower()
+        assert "added it to your cart" in cont_data["reply"].lower()
 
 
 @pytest.mark.asyncio

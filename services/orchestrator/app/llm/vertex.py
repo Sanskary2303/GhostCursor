@@ -183,6 +183,36 @@ CHECKOUT_FILL_ACTIONS = [
     {"type": "fill_input", "target_id": "checkout.zip", "value": "10001", "explanation": "Enter ZIP code"},
 ]
 
+# Completion text per scenario, matched against the user's first message in the run.
+# The first match wins, so put more specific phrases first.
+COMPLETION_REPLIES = [
+    ("dark mode", "Theme switched to Dark Mode 🌙"),
+    ("air max", "Added the Air Max 90 (size 10) to your cart 🛒"),
+    ("add to cart", "Added it to your cart 🛒"),
+    ("track", "That's how you track an order. The carrier and tracking number are on each order card."),
+    ("checkout", "Your shipping address is filled in. Review it, then place the order when you're ready."),
+]
+DEFAULT_COMPLETION = "Done. All steps completed."
+
+
+def _first_user_text(transcript: Optional[List[Dict[str, Any]]]) -> str:
+    """The user's original request: the first plain-text user part in the transcript."""
+    for turn in transcript or []:
+        if turn.get("role") != "user":
+            continue
+        for part in turn.get("parts", []):
+            if isinstance(part, dict) and isinstance(part.get("text"), str):
+                return part["text"]
+    return ""
+
+
+def completion_reply(transcript: Optional[List[Dict[str, Any]]]) -> str:
+    request = _first_user_text(transcript).lower()
+    for pattern, reply in COMPLETION_REPLIES:
+        if pattern in request:
+            return reply
+    return DEFAULT_COMPLETION
+
 
 class MockVertexAIClient(BaseVertexClient):
     """
@@ -194,10 +224,10 @@ class MockVertexAIClient(BaseVertexClient):
     FIXTURES = {
         "dark mode": {
             "status": "awaiting_actions",
-            "reply": "I'll switch the theme to dark mode for you. Here's my plan:",
+            "reply": "I'll switch ShopHive to dark mode for you. Here's my plan:",
             "actions": [
-                {"type": "navigate", "target_page": "settings", "explanation": "Navigate to settings page where theme controls are located"},
-                {"type": "click", "target_id": "theme.dark", "explanation": "Select dark theme"},
+                {"type": "navigate", "target_page": "settings", "explanation": "Open Settings, where the theme switch lives"},
+                {"type": "toggle_switch", "target_id": "theme.toggle", "state": True, "explanation": "Turn the Dark mode switch on"},
             ],
         },
         "add to cart": {
@@ -368,7 +398,7 @@ class MockVertexAIClient(BaseVertexClient):
                 runId=run_id,
                 revision=revision,
                 status="completed",
-                reply="All steps executed successfully on your screen.",
+                reply=completion_reply(transcript if transcript is not None else run_context.get("transcript")),
             ))
 
         # Handle clarification answer continuation

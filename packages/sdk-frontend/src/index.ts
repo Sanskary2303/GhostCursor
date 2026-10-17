@@ -10,6 +10,10 @@ export * from './core/dom-utils';
 export * from './core/native-setter';
 
 // Engine components
+export { createCursorSvg, BRAND, CURSOR_POLYGON, CURSOR_VIEWBOX, CURSOR_WIDTH, CURSOR_HOTSPOT } from './core/cursor/assets';
+export type { CursorSvgOptions } from './core/cursor/assets';
+export { MIDNIGHT, DAYLIGHT, resolveMode, tokensFor, tokensToCss } from './core/theme/tokens';
+export type { ThemeMode, ThemeTokens } from './core/theme/tokens';
 export { ElementResolver } from './core/executor/ElementResolver';
 export { ActionExecutor } from './core/executor/ActionExecutor';
 export { CursorEngine } from './core/engine/CursorEngine';

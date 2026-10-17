@@ -39,6 +39,7 @@ export const GhostCursor: FC<GhostCursorProps> = (props) => {
         primaryColor: propsRef.current.theme?.primaryColor,
         cursorColor: propsRef.current.theme?.cursorColor,
         position: propsRef.current.theme?.position,
+        mode: propsRef.current.theme?.mode,
       },
       onMessage: (msg: any) => propsRef.current.onMessage?.(msg),
       onActionsRequested: (acts: any) => propsRef.current.onActionsRequested?.(acts),

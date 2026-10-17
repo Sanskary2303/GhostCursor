@@ -92,5 +92,20 @@ describe('native-setter', () => {
     expect(checkbox.checked).toBe(true);
     expect(changeSpy).toHaveBeenCalledTimes(1);
   });
+
+  it('toggles a checkbox with a real click, and does nothing when already in that state', () => {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    document.body.appendChild(checkbox);
+    const seen: boolean[] = [];
+    checkbox.addEventListener('click', () => seen.push(checkbox.checked));
+
+    setNativeCheckboxState(checkbox, true);
+    expect(seen).toEqual([true]);
+    expect(checkbox.checked).toBe(true);
+
+    setNativeCheckboxState(checkbox, true);
+    expect(seen).toEqual([true]);
+  });
 });
 

@@ -7,6 +7,8 @@ import { CursorEngine, getCursorEngine, disposeCursorEngine } from './engine/Cur
 import { TourEngine } from './engine/TourEngine';
 import { ChatWidget, Message } from './chat/ChatWidget';
 import { resolveTargetWithCascade, registerTarget } from './dom-utils';
+import { BRAND } from './cursor/assets';
+import type { ThemeMode } from './theme/tokens';
 
 export interface GhostCursorSDK {
   dispose(): void;
@@ -28,6 +30,7 @@ export interface CreateGhostCursorOptions {
     primaryColor?: string;
     cursorColor?: string;
     position?: 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right' | 'center';
+    mode?: ThemeMode;
   };
   requireApprovalForActions?: boolean;
   transport?: 'http' | 'websocket';
@@ -62,13 +65,17 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     onContextChange,
   } = options;
 
-  // Merge theme with defaults
+  // Drop undefined values so wrappers that forward every key don't erase the defaults.
+  const definedTheme = Object.fromEntries(
+    Object.entries(theme).filter(([, value]) => value !== undefined)
+  ) as NonNullable<CreateGhostCursorOptions['theme']>;
   const mergedTheme = {
-    primaryColor: '#0052FF',
-    cursorColor: '#FF4D4D',
-    position: 'bottom-right' as const,
-    ...theme,
-  };
+    primaryColor: BRAND.blue as string,
+    cursorColor: BRAND.blue as string,
+    position: 'bottom-right' as NonNullable<CreateGhostCursorOptions['theme']>['position'],
+    mode: 'midnight' as ThemeMode,
+    ...definedTheme,
+  } as Required<NonNullable<CreateGhostCursorOptions['theme']>>;
 
   // Initialize components
   const contextProvider = new ContextProvider({

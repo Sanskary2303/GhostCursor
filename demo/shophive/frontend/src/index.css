@@ -4,7 +4,26 @@
 
 body {
   @apply bg-gray-50 text-gray-900;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }
+
+/* ---- Dark mode (html.dark is set by ThemeContext) ---- */
+html.dark { color-scheme: dark; }
+html.dark body { background-color: #030712; color: #f3f4f6; }
+html.dark .bg-white { background-color: #111827; }
+html.dark .bg-gray-50 { background-color: #0b1220; }
+html.dark .bg-gray-100 { background-color: #1f2937; }
+html.dark .text-gray-900 { color: #f3f4f6; }
+html.dark .text-gray-700 { color: #d1d5db; }
+html.dark .text-gray-600,
+html.dark .text-gray-500 { color: #9ca3af; }
+html.dark input:not([type="checkbox"]):not([type="radio"]),
+html.dark select,
+html.dark textarea { background-color: #1f2937; color: #f3f4f6; border-color: #374151; }
+/* Default border colour only (zero specificity, so border-blue-600 etc. still win). */
+:where(html.dark) *,
+:where(html.dark) ::before,
+:where(html.dark) ::after { border-color: #374151; }
 
 #root {
   min-height: 100vh;

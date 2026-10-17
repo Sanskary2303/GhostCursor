@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
+import { useTheme } from '../theme/ThemeContext';
 
 export function Settings() {
-  const [theme, setTheme] = useState('light');
+  const { theme, setTheme } = useTheme();
   const [emailNotifications, setEmailNotifications] = useState(true);
   const [smsNotifications, setSmsNotifications] = useState(false);
   const [pushNotifications, setPushNotifications] = useState(true);
@@ -15,6 +16,26 @@ export function Settings() {
         <section className="bg-white rounded-xl border border-gray-200 p-6">
           <h2 className="text-xl font-bold mb-4">Appearance</h2>
           <p className="text-gray-600 mb-4">Customize how ShopHive looks on your device.</p>
+
+          <div className="flex items-center justify-between py-4 border-b">
+            <div>
+              <p className="font-medium">Dark mode</p>
+              <p className="text-sm text-gray-600">Use a dark background across ShopHive</p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer">
+              <input
+                type="checkbox"
+                role="switch"
+                data-ghost-id="theme.toggle"
+                data-ghost-observe
+                aria-label="Dark mode"
+                checked={theme === 'dark'}
+                onChange={(e) => setTheme(e.target.checked ? 'dark' : 'light')}
+                className="peer h-6 w-11 cursor-pointer appearance-none rounded-full bg-gray-300 transition-colors checked:bg-blue-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-600"
+              />
+              <span className="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5" />
+            </label>
+          </div>
 
           <div className="flex items-center justify-between py-4 border-b">
             <div>

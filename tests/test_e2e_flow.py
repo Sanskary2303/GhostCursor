@@ -233,4 +233,39 @@ async def test_login_invalid_body():
         assert res_non_dict.json()["detail"] == "invalid_credentials"
 
 
+@pytest.mark.asyncio
+async def test_order_lookup_different_user_cannot_read_sh_1024(monkeypatch):
+    """
+    A different user cannot read SH-1024 (owned by user_demo):
+    User is logged in as 'other' (user_other), and queries SH-1024.
+    Tool returns 'not found', synthesized reply confirms order not found.
+    """
+    orch_transport = ASGITransport(app=orch_app)
+    shop_transport = ASGITransport(app=shop_app)
+
+    async def mock_get_http_client(self):
+        return AsyncClient(transport=orch_transport, base_url="http://localhost:8080")
+
+    monkeypatch.setattr(ghost, "_get_http_client", mock_get_http_client.__get__(ghost, type(ghost)))
+
+    async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client:
+        login_res = await client.post("/api/login", json={"username": "other"})
+        assert login_res.status_code == 200
+
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "Where is my order SH-1024?",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }
+
+        response = await client.post("/api/ghost-cursor", json=payload)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert "not found" in data["reply"].lower()
+
+
+
 

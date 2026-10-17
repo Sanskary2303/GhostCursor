@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 # Import local modules
 from tools.ghost_tools import register_shophive_tools
+from shop_data import seed_shop_data
 
 # ============================================================================
 # Configuration
@@ -70,6 +71,7 @@ async def ensure_tables():
     global _tables_initialized
     if not _tables_initialized:
         await chat_store.create_tables()
+        await seed_shop_data(db_engine)
         _tables_initialized = True
 
 @asynccontextmanager
@@ -78,7 +80,7 @@ async def lifespan(app: FastAPI):
     yield
 
 # Register customer backend tools
-register_shophive_tools(ghost)
+register_shophive_tools(ghost, db_engine)
 
 # ============================================================================
 # Application Setup
@@ -100,7 +102,7 @@ app.add_middleware(
     max_age=8 * 3600,
 )
 
-DEMO_USERS = {"demo": "user_demo"}
+DEMO_USERS = {"demo": "user_demo", "other": "user_other"}
 ALLOWED_ORIGINS = {
     o
     for o in os.getenv("SHOPHIVE_ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")

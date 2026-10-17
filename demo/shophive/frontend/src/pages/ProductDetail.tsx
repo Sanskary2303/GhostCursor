@@ -183,7 +183,6 @@ export function ProductDetail() {
           {/* Cart notification */}
           {notice && (
             <div
-              role="status"
               data-ghost-id="product.cart_notice"
               className={`border rounded-lg p-4 ${
                 notice.includes('Please')

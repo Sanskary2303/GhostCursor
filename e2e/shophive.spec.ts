@@ -59,6 +59,7 @@ test('add to cart waits for approval, then changes React state', async ({ page }
   await approve(page);
   await expect(page).toHaveURL(/\/product\/air-max-90$/);
   await expect(page.getByRole('link', { name: 'Cart (1)' })).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('status').filter({ hasText: /Added.*Air Max 90/ })).toBeVisible();
   await expect(chat(page)).toContainText('Added the Air Max 90', { timeout: 20_000 });
 });
 

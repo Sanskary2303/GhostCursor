@@ -6,10 +6,17 @@ Customer-registered read-only tools for ShopHive demo.
 These tools are executed locally on the customer backend via Gateway Loopback.
 """
 
+import os
+import asyncio
+from typing import Any, Dict, Optional
 from pydantic import BaseModel, Field
 from ghost_cursor import GhostCursorBackend
-import asyncio
-from typing import Any, Dict
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
+
+try:
+    from shop_data import fetch_order, fetch_stock
+except ImportError:
+    from ..shop_data import fetch_order, fetch_stock
 
 
 # ============================================================================
@@ -52,56 +59,16 @@ class DiscountQuery(BaseModel):
 # Tool Registration
 # ============================================================================
 
-def register_shophive_tools(ghost: GhostCursorBackend):
+def register_shophive_tools(ghost: GhostCursorBackend, engine: Optional[AsyncEngine] = None):
     """
     Register customer-specific read-only tools with Ghost Cursor.
     These tools execute locally on the customer backend.
     """
-
-    # Mock database for demo
-    mock_orders = {
-        "SH-1024": {
-            "order_id": "SH-1024",
-            "owner": "user_demo",
-            "customer_name": "John Doe",
-            "items": [
-                {"name": "Nike Air Max 90", "size": "10", "price": 129.99, "quantity": 1},
-            ],
-            "total": 129.99,
-            "status": "Shipped",
-            "tracking_number": "1Z999AA10123456784",
-            "carrier": "UPS",
-            "shipped_date": "2024-01-17",
-            "estimated_delivery": "2024-01-20",
-        },
-        "SH-987": {
-            "order_id": "SH-987",
-            "owner": "user_other",
-            "customer_name": "Jane Smith",
-            "items": [
-                {"name": "Air Jordan 1 Retro", "size": "10", "price": 179.99, "quantity": 1},
-            ],
-            "total": 179.99,
-            "status": "Delivered",
-            "tracking_number": "1Z999AA10123456780",
-            "carrier": "FedEx",
-            "shipped_date": "2024-01-12",
-            "estimated_delivery": "2024-01-15",
-        },
-    }
-
-    mock_inventory = {
-        ("NK-AM90-01", "10"): 20,
-        ("NK-AM90-01", "11"): 8,
-        ("NK-AM90-01", "12"): 5,
-        ("NK-AM90-01", "13"): 3,
-        ("NK-AJ1-01", "10"): 16,
-        ("NK-AJ1-01", "11"): 9,
-        ("NK-AJ1-01", "12"): 4,
-        ("NK-Y350-01", "10"): 12,
-        ("NK-UB22-01", "10"): 15,
-        ("NK-UB22-01", "11"): 8,
-    }
+    if engine is None:
+        db_url = os.getenv("SHOPHIVE_DATABASE_URL", "sqlite+aiosqlite:///./shophive.db")
+        if db_url.startswith("sqlite:///"):
+            db_url = db_url.replace("sqlite:///", "sqlite+aiosqlite:///", 1)
+        engine = create_async_engine(db_url)
 
     @ghost.register_tool(
         name="lookup_order",
@@ -113,19 +80,12 @@ def register_shophive_tools(ghost: GhostCursorBackend):
         """
         Look up an order by ID.
 
-        This tool simulates querying the customer's PostgreSQL database
+        This tool queries the customer's database
         to retrieve order information.
         """
-        user_id = context.get("user_id", "anonymous")
-
-        # In production, this would query the actual database
-        # order = await fetch_order_from_db(params.order_id, user_id)
-
-        # For demo, return mock data if order exists and belongs to user
-        if params.order_id in mock_orders:
-            order = mock_orders[params.order_id]
-            if order.get("owner") != context.get("user_id"):
-                return {"error": f"Order {params.order_id} not found"}
+        user_id = context.get("user_id", "")
+        order = await fetch_order(engine, params.order_id, user_id)
+        if order:
             return {
                 "order_id": order["order_id"],
                 "customer_name": order["customer_name"],
@@ -137,10 +97,9 @@ def register_shophive_tools(ghost: GhostCursorBackend):
                 "shipped_date": order["shipped_date"],
                 "estimated_delivery": order["estimated_delivery"],
             }
-        else:
-            return {
-                "error": f"Order {params.order_id} not found",
-            }
+        return {
+            "error": f"Order {params.order_id} not found",
+        }
 
     @ghost.register_tool(
         name="check_warehouse_stock",
@@ -152,31 +111,23 @@ def register_shophive_tools(ghost: GhostCursorBackend):
         """
         Check warehouse inventory for a specific SKU and size.
 
-        This tool simulates querying the customer's inventory system
+        This tool queries the customer's inventory system
         to check product availability.
         """
-        user_id = context.get("user_id", "anonymous")
-
-        # In production, this would query the actual inventory system
-        # stock = await query_inventory_system(params.sku, params.size)
-
-        # For demo, return mock data
-        key = (params.sku, params.size)
-        if key in mock_inventory:
-            units = mock_inventory[key]
+        units = await fetch_stock(engine, params.sku, params.size)
+        if units is not None:
             return {
                 "sku": params.sku,
                 "size": params.size,
                 "available_units": units,
                 "unit_message": f"{units} units available" if units > 0 else "Out of stock",
             }
-        else:
-            return {
-                "sku": params.sku,
-                "size": params.size,
-                "available_units": 0,
-                "unit_message": "SKU not found",
-            }
+        return {
+            "sku": params.sku,
+            "size": params.size,
+            "available_units": 0,
+            "unit_message": "SKU not found",
+        }
 
     @ghost.register_tool(
         name="simulate_discount_roi",

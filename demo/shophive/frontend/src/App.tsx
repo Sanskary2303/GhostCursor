@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { CartProvider } from './cart/CartContext';
 import { ThemeProvider } from './theme/ThemeContext';
 import { NavigationHeader } from './components/NavigationHeader';
+import { CartToast } from './components/CartToast';
 import { Home } from './pages/Home';
 import { ProductDetail } from './pages/ProductDetail';
 import { Cart } from './pages/Cart';
@@ -10,29 +11,12 @@ import { Checkout } from './pages/Checkout';
 import { OrderTracking } from './pages/OrderTracking';
 import { Settings } from './pages/Settings';
 
-// [GHOST-CURSOR INTEGRATION - STEP 1: IMPORT SDK COMPONENT]
+// [GHOST-CURSOR INTEGRATION]
 import { GhostCursor } from '@ghost-cursor/sdk-react';
-import {
-  ActionExecutor,
-  registerTarget,
-  getRegisteredTarget,
-  clearTargetRegistry,
-  resolveTargetWithCascade,
-  reResolveElement,
-} from '@ghost-cursor/sdk';
-
-if (typeof window !== 'undefined' && import.meta.env.VITE_E2E_HOOKS === '1') {
-  (window as any).__GHOST_CURSOR_SDK__ = {
-    ActionExecutor,
-    registerTarget,
-    getRegisteredTarget,
-    clearTargetRegistry,
-    resolveTargetWithCascade,
-    reResolveElement,
-  };
-}
 
 const ROUTE_PAGES: Record<string, string> = { '/': 'home', '/cart': 'cart', '/checkout': 'checkout', '/orders': 'orders', '/settings': 'settings' };
+
+// [GHOST-CURSOR INTEGRATION]
 const ghostContext = {
   page: () => (window.location.pathname.startsWith('/product/') ? 'products' : ROUTE_PAGES[window.location.pathname] ?? 'home'),
 };
@@ -45,6 +29,7 @@ export function App() {
         <CartProvider>
           <div className="min-h-screen bg-gray-50 text-gray-900">
             <NavigationHeader />
+            <CartToast />
 
             <main className="container mx-auto px-4 py-8">
               <Routes>
@@ -57,7 +42,7 @@ export function App() {
               </Routes>
             </main>
 
-            {/* [GHOST-CURSOR INTEGRATION - STEP 2: MOUNT WIDGET WITH ENDPOINT & CONFIG] */}
+            {/* [GHOST-CURSOR INTEGRATION] */}
             <GhostCursor
               apiEndpoint="/api/ghost-cursor"
               theme={ghostTheme}

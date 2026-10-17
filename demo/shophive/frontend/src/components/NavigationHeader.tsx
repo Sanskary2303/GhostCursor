@@ -75,11 +75,12 @@ export function NavigationHeader() {
               to="/cart"
               data-ghost-id="nav.cart"
               data-ghost-nav="cart"
+              aria-label={`Cart (${count})`}
               className={`text-sm font-medium transition-colors ${
                 isActive('/cart') ? 'text-blue-600' : 'text-gray-600 hover:text-gray-900'
               }`}
             >
-              Cart ({count})
+              Cart (<span key={count} className={count > 0 ? 'cart-bump' : ''}>{count}</span>)
             </Link>
             <Link
               to="/orders"

@@ -11,11 +11,14 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, AsyncGenerator
 
 import sqlalchemy as sa
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import NullPool
 
 from .types import ChatSession, ChatMessage
+
+JSON_DOC = sa.JSON().with_variant(JSONB(), "postgresql")
 
 
 # Base classes for async repositories
@@ -127,12 +130,16 @@ class SQGCBChatMessage(Base):
     __tablename__ = "ghost_chat_messages"
 
     message_id = sa.Column(sa.VARCHAR(64), primary_key=True)
-    session_id = sa.Column(sa.VARCHAR(64), sa.ForeignKey("ghost_chat_sessions.session_id"), nullable=False)
+    session_id = sa.Column(
+        sa.VARCHAR(64),
+        sa.ForeignKey("ghost_chat_sessions.session_id", ondelete="CASCADE"),
+        nullable=False,
+    )
     run_id = sa.Column(sa.VARCHAR(64), index=True, nullable=True)
     role = sa.Column(sa.VARCHAR(20), nullable=False)
     content = sa.Column(sa.Text, nullable=False)
-    tool_calls = sa.Column(sa.JSON, default=list)
-    client_actions = sa.Column(sa.JSON, default=list)
+    tool_calls = sa.Column(JSON_DOC, default=list)
+    client_actions = sa.Column(JSON_DOC, default=list)
     token_count = sa.Column(sa.Integer, default=0)
     created_at = sa.Column(sa.TIMESTAMP(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -159,6 +166,9 @@ class SQLAlchemyChatStore(ChatStore):
             class_=AsyncSession,
             expire_on_commit=False,
         )
+
+    def _owns(self, row: Optional[SQGCBChatSession], user_id: str) -> bool:
+        return bool(row) and row.user_id == user_id and (not self.tenant_id or row.tenant_id == self.tenant_id)
 
     async def create_tables(self) -> None:
         """Create tables if they don't exist"""
@@ -208,10 +218,7 @@ class SQLAlchemyChatStore(ChatStore):
     async def get_session(self, session_id: str, user_id: str) -> Optional[ChatSession]:
         async with await self._get_session() as session:
             result = await session.get(SQGCBChatSession, session_id)
-            if not result:
-                return None
-
-            if result.user_id != user_id:
+            if not self._owns(result, user_id):
                 return None
 
             return ChatSession(
@@ -297,7 +304,7 @@ class SQLAlchemyChatStore(ChatStore):
         async with await self._get_session() as session:
             # Verify session ownership
             session_result = await session.get(SQGCBChatSession, session_id)
-            if not session_result or session_result.user_id != user_id:
+            if not self._owns(session_result, user_id):
                 return []
 
             query = (
@@ -337,7 +344,7 @@ class SQLAlchemyChatStore(ChatStore):
         async with await self._get_session() as session:
             # Verify session ownership
             session_result = await session.get(SQGCBChatSession, session_id)
-            if not session_result or session_result.user_id != user_id:
+            if not self._owns(session_result, user_id):
                 raise ValueError(f"Unauthorized or session not found: {session_id}")
 
             for msg_data in messages:
@@ -361,7 +368,7 @@ class SQLAlchemyChatStore(ChatStore):
         async with await self._get_session() as session:
             # Verify session ownership
             session_result = await session.get(SQGCBChatSession, session_id)
-            if not session_result or session_result.user_id != user_id:
+            if not self._owns(session_result, user_id):
                 return 0
 
             query = sa.select(sa.func.count()).select_from(SQGCBChatMessage).where(
@@ -380,7 +387,7 @@ class SQLAlchemyChatStore(ChatStore):
         async with await self._get_session() as session:
             # Verify session ownership
             session_result = await session.get(SQGCBChatSession, session_id)
-            if not session_result or session_result.user_id != user_id:
+            if not self._owns(session_result, user_id):
                 raise ValueError(f"Unauthorized or session not found: {session_id}")
 
             # Get all messages
@@ -419,7 +426,7 @@ class SQLAlchemyChatStore(ChatStore):
     ) -> None:
         async with await self._get_session() as session:
             result = await session.get(SQGCBChatSession, session_id)
-            if not result or result.user_id != user_id:
+            if not self._owns(result, user_id):
                 raise ValueError(f"Unauthorized or session not found: {session_id}")
 
             if title is not None:
@@ -433,9 +440,12 @@ class SQLAlchemyChatStore(ChatStore):
     async def delete_session(self, session_id: str, user_id: str) -> bool:
         async with await self._get_session() as session:
             result = await session.get(SQGCBChatSession, session_id)
-            if not result or result.user_id != user_id:
+            if not self._owns(result, user_id):
                 return False
 
+            await session.execute(
+                sa.delete(SQGCBChatMessage).where(SQGCBChatMessage.session_id == session_id)
+            )
             await session.delete(result)
             await session.commit()
             return True
@@ -448,6 +458,9 @@ class InMemoryChatStore(ChatStore):
         self.tenant_id = tenant_id
         self._sessions: Dict[str, ChatSession] = {}
         self._messages: Dict[str, List[ChatMessage]] = {}
+
+    def _owns(self, session: Optional[ChatSession], user_id: str) -> bool:
+        return bool(session) and session.user_id == user_id and (not self.tenant_id or session.tenant_id == self.tenant_id)
 
     async def create_tables(self) -> None:
         """No-op for in-memory store"""
@@ -480,7 +493,7 @@ class InMemoryChatStore(ChatStore):
 
     async def get_session(self, session_id: str, user_id: str) -> Optional[ChatSession]:
         session = self._sessions.get(session_id)
-        if session and session.user_id == user_id:
+        if self._owns(session, user_id):
             return session
         return None
 

@@ -1658,6 +1658,174 @@ async def test_in_memory_chat_store_rejects_duplicate_session_id():
         await store.create_session("user_2", "tenant_test", title="Session 2", session_id="fixed-id-123")
 
 
+@pytest.mark.asyncio
+async def test_sqlalchemy_chat_store_cascade_deletion():
+    """delete_session removes the session and cleans up all messages without leaving orphan rows"""
+    from ghost_cursor.storage import SQGCBChatMessage
+    import sqlalchemy as sa
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SQLAlchemyChatStore(engine, tenant_id="tenant_cascade")
+    await store.create_tables()
+
+    session = await store.create_session("user_1", "tenant_cascade", title="Cascade test")
+    sess_id = session.session_id
+
+    await store.append_messages(
+        sess_id,
+        "user_1",
+        [
+            {"role": "user", "content": "Hello world", "token_count": 2},
+            {"role": "assistant", "content": "Hi there", "token_count": 2},
+        ],
+    )
+
+    msgs = await store.get_messages(sess_id, "user_1")
+    assert len(msgs) == 2
+
+    # Verify messages exist in database
+    async with await store._get_session() as db_session:
+        res = await db_session.execute(
+            sa.select(SQGCBChatMessage).where(SQGCBChatMessage.session_id == sess_id)
+        )
+        assert len(res.scalars().all()) == 2
+
+    # Delete session
+    deleted = await store.delete_session(sess_id, "user_1")
+    assert deleted is True
+
+    # Verify session is gone
+    assert await store.get_session(sess_id, "user_1") is None
+    assert await store.get_messages(sess_id, "user_1") == []
+
+    # Verify no orphan messages in database table
+    async with await store._get_session() as db_session:
+        res = await db_session.execute(
+            sa.select(SQGCBChatMessage).where(SQGCBChatMessage.session_id == sess_id)
+        )
+        assert len(res.scalars().all()) == 0
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_chat_store_tenant_isolation_get_and_delete():
+    """Multi-tenant isolation: tenant B cannot read, append to, or delete tenant A's session"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store_a = SQLAlchemyChatStore(engine, tenant_id="tenant_a")
+    await store_a.create_tables()
+    store_b = SQLAlchemyChatStore(engine, tenant_id="tenant_b")
+
+    sess_a = await store_a.create_session("user_common", "tenant_a", title="Tenant A Session")
+    sess_id = sess_a.session_id
+
+    await store_a.append_messages(
+        sess_id,
+        "user_common",
+        [{"role": "user", "content": "Msg A", "token_count": 1}],
+    )
+
+    # Tenant B tries to get session, messages, append, count, delete
+    assert await store_b.get_session(sess_id, "user_common") is None
+    assert await store_b.get_messages(sess_id, "user_common") == []
+    assert await store_b.count_turns(sess_id, "user_common") == 0
+    with pytest.raises(ValueError, match="Unauthorized or session not found"):
+        await store_b.append_messages(sess_id, "user_common", [{"role": "user", "content": "Attack"}])
+    assert await store_b.delete_session(sess_id, "user_common") is False
+
+    # Tenant A still has the session and messages
+    assert await store_a.get_session(sess_id, "user_common") is not None
+    assert len(await store_a.get_messages(sess_id, "user_common")) == 1
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_in_memory_chat_store_cascade_and_tenant_isolation():
+    """InMemoryChatStore cascade deletion removes messages and enforces tenant isolation"""
+    store_a = InMemoryChatStore(tenant_id="tenant_a")
+    sess = await store_a.create_session("user_1", "tenant_a", title="InMemory Session")
+    sess_id = sess.session_id
+
+    await store_a.append_messages(
+        sess_id,
+        "user_1",
+        [{"role": "user", "content": "Hello", "token_count": 1}],
+    )
+    assert len(await store_a.get_messages(sess_id, "user_1")) == 1
+
+    # Store B with different tenant cannot access or delete
+    store_b = InMemoryChatStore(tenant_id="tenant_b")
+    store_b._sessions = store_a._sessions
+    store_b._messages = store_a._messages
+
+    assert await store_b.get_session(sess_id, "user_1") is None
+    assert await store_b.get_messages(sess_id, "user_1") == []
+    assert await store_b.delete_session(sess_id, "user_1") is False
+
+    # Delete via store_a cascades
+    assert await store_a.delete_session(sess_id, "user_1") is True
+    assert sess_id not in store_a._sessions
+    assert sess_id not in store_a._messages
+
+
+@pytest.mark.asyncio
+async def test_persist_turn_calculates_token_count():
+    """_persist_turn calculates token_count = max(1, len(text) // 4)"""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    store = SQLAlchemyChatStore(engine, tenant_id="tenant_tokens")
+    await store.create_tables()
+
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_tokens",
+        chat_store=store,
+    )
+
+    user_text = "Where is my package please?"
+    assistant_text = "Your package is currently in transit."
+
+    def mock_handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "protocolVersion": "1",
+                "runId": "run_token_test",
+                "revision": 0,
+                "status": "completed",
+                "reply": assistant_text,
+                "actions": [],
+            },
+        )
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": user_text,
+        "context": {"page": "orders", "values": {}, "availableTargets": []},
+    }
+    await backend.handle_turn(payload, "user_1")
+
+    sessions = await store.list_sessions("user_1")
+    assert len(sessions) == 1
+    messages = await store.get_messages(sessions[0].session_id, "user_1")
+    assert len(messages) == 2
+
+    user_msg = next(m for m in messages if m.role == "user")
+    asst_msg = next(m for m in messages if m.role == "assistant")
+
+    assert user_msg.token_count == max(1, len(user_text) // 4)
+    assert asst_msg.token_count == max(1, len(assistant_text) // 4)
+    assert user_msg.token_count > 0
+    assert asst_msg.token_count > 0
+
+    await engine.dispose()
+
+
+
 
 
 

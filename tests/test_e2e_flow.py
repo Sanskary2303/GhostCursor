@@ -267,5 +267,99 @@ async def test_order_lookup_different_user_cannot_read_sh_1024(monkeypatch):
         assert "not found" in data["reply"].lower()
 
 
+@pytest.mark.asyncio
+async def test_session_lifecycle_and_message_projection(monkeypatch):
+    """
+    Test session lifecycle end-to-end:
+    1. POST /api/ghost-cursor/sessions creates a new session.
+    2. GET /api/ghost-cursor/sessions/{session_id}/messages is initially empty.
+    3. Send turn with sessionId -> turn persists messages.
+    4. GET /api/ghost-cursor/sessions/{session_id}/messages returns projected messages (role, content, created_at only; no tool_calls or client_actions).
+    5. Another user ('other') attempting to access or delete gets 404.
+    6. Invalid UUID format returns 404.
+    7. DELETE /api/ghost-cursor/sessions/{session_id} succeeds.
+    8. Second DELETE returns 404.
+    """
+    orch_transport = ASGITransport(app=orch_app)
+    shop_transport = ASGITransport(app=shop_app)
+
+    async def mock_get_http_client(self):
+        return AsyncClient(transport=orch_transport, base_url="http://localhost:8080")
+
+    monkeypatch.setattr(ghost, "_get_http_client", mock_get_http_client.__get__(ghost, type(ghost)))
+
+    # Client A: user 'demo'
+    async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client_demo:
+        await client_demo.post("/api/login", json={"username": "demo"})
+
+        # 1. Create session
+        create_res = await client_demo.post("/api/ghost-cursor/sessions", json={"title": "Test E2E Session"})
+        assert create_res.status_code == 200
+        sess_data = create_res.json()
+        session_id = sess_data["session_id"]
+        assert sess_data["title"] == "Test E2E Session"
+        assert "created_at" in sess_data
+
+        # 2. Get messages - initially empty
+        msg_res = await client_demo.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
+        assert msg_res.status_code == 200
+        assert msg_res.json() == {"messages": []}
+
+        # 3. Send turn with sessionId
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "sessionId": session_id,
+            "message": "Where is my order SH-1024?",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }
+        turn_res = await client_demo.post("/api/ghost-cursor", json=payload)
+        assert turn_res.status_code == 200
+        assert turn_res.json()["status"] == "completed"
+
+        # 4. GET /messages has clean public projection: role, content, created_at only
+        msg_res2 = await client_demo.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
+        assert msg_res2.status_code == 200
+        messages = msg_res2.json()["messages"]
+        assert len(messages) == 2
+        for m in messages:
+            assert set(m.keys()) == {"role", "content", "created_at"}
+            assert m["role"] in ("user", "assistant")
+            assert isinstance(m["content"], str)
+            assert "tool_calls" not in m
+            assert "client_actions" not in m
+
+        # 5. Client B (user 'other') cannot access demo's session
+        async with AsyncClient(transport=shop_transport, base_url="http://localhost:8081") as client_other:
+            await client_other.post("/api/login", json={"username": "other"})
+
+            other_get = await client_other.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
+            assert other_get.status_code == 404
+
+            other_del = await client_other.delete(f"/api/ghost-cursor/sessions/{session_id}")
+            assert other_del.status_code == 404
+
+        # 6. Invalid UUID format returns 404
+        invalid_get = await client_demo.get("/api/ghost-cursor/sessions/not-a-valid-uuid/messages")
+        assert invalid_get.status_code == 404
+        invalid_del = await client_demo.delete("/api/ghost-cursor/sessions/not-a-valid-uuid")
+        assert invalid_del.status_code == 404
+
+        # 7. Delete session succeeds
+        del_res = await client_demo.delete(f"/api/ghost-cursor/sessions/{session_id}")
+        assert del_res.status_code == 200
+        assert del_res.json() == {"ok": True}
+
+        # 8. Second delete returns 404
+        del_res2 = await client_demo.delete(f"/api/ghost-cursor/sessions/{session_id}")
+        assert del_res2.status_code == 404
+
+        # GET messages also returns 404 now
+        msg_res3 = await client_demo.get(f"/api/ghost-cursor/sessions/{session_id}/messages")
+        assert msg_res3.status_code == 404
+
+
+
 
 

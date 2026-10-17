@@ -710,16 +710,20 @@ class GhostCursorBackend:
 
             messages = []
             if request_payload.get("message"):
+                text = str(request_payload["message"])
                 messages.append({
                     "role": "user",
-                    "content": request_payload["message"],
+                    "content": text,
                     "run_id": str(response.runId),
+                    "token_count": max(1, len(text) // 4),
                 })
             elif request_payload.get("answer"):
+                text = str(request_payload["answer"])
                 messages.append({
                     "role": "user",
-                    "content": request_payload["answer"],
+                    "content": text,
                     "run_id": str(response.runId),
+                    "token_count": max(1, len(text) // 4),
                 })
 
             if response.reply is not None:
@@ -727,6 +731,7 @@ class GhostCursorBackend:
                     "role": "assistant",
                     "content": response.reply,
                     "run_id": str(response.runId),
+                    "token_count": max(1, len(str(response.reply)) // 4),
                     "client_actions": [
                         a if isinstance(a, dict) else a.model_dump() for a in (response.actions or [])
                     ],

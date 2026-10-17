@@ -6,6 +6,7 @@ Customer backend that integrates Ghost Cursor SDK for AI co-pilot functionality.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -217,6 +218,38 @@ async def handle_ghost_turn(request: Request, user_id: str = Depends(require_use
             headers={"Cache-Control": "no-store"},
         )
 
+SESSION_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
+
+
+@ghost_router.post("/sessions", dependencies=[Depends(same_origin)])
+async def create_session(request: Request, user_id: str = Depends(require_user)):
+    """Create a new chat session"""
+    await ensure_tables()
+    if not ghost.chat_store:
+        raise HTTPException(status_code=500, detail="chat_store_disabled")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = (body.get("title") if isinstance(body, dict) else None) or "New Conversation"
+    session_id = body.get("session_id") if isinstance(body, dict) else None
+    if session_id and not SESSION_ID.match(str(session_id)):
+        raise HTTPException(status_code=400, detail="invalid_session_id")
+    sess = await ghost.chat_store.create_session(
+        user_id=user_id,
+        tenant_id=ghost.config.tenant_id,
+        title=str(title)[:255],
+        session_id=str(session_id) if session_id else None,
+    )
+    return {
+        "session_id": sess.session_id,
+        "title": sess.title,
+        "summary": sess.summary,
+        "created_at": sess.created_at.isoformat() if hasattr(sess.created_at, "isoformat") else str(sess.created_at),
+        "updated_at": sess.updated_at.isoformat() if hasattr(sess.updated_at, "isoformat") else str(sess.updated_at),
+    }
+
+
 @ghost_router.get("/sessions")
 async def list_sessions(user_id: str = Depends(require_user)):
     """List user chat sessions"""
@@ -235,6 +268,49 @@ async def list_sessions(user_id: str = Depends(require_user)):
             ]
         }
     return {"sessions": []}
+
+
+@ghost_router.get("/sessions/{session_id}/messages")
+async def get_session_messages(session_id: str, user_id: str = Depends(require_user)):
+    """Get messages for a session (projected for client display)"""
+    if not SESSION_ID.match(session_id):
+        raise HTTPException(status_code=404, detail="session_not_found")
+    await ensure_tables()
+    if not ghost.chat_store:
+        raise HTTPException(status_code=500, detail="chat_store_disabled")
+
+    session = await ghost.chat_store.get_session(session_id, user_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="session_not_found")
+
+    messages = await ghost.chat_store.get_messages(session_id, user_id)
+    return {
+        "messages": [
+            {
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat() if hasattr(m.created_at, "isoformat") else str(m.created_at),
+            }
+            for m in messages
+            if m.role in ("user", "assistant")
+        ]
+    }
+
+
+@ghost_router.delete("/sessions/{session_id}", dependencies=[Depends(same_origin)])
+async def delete_session(session_id: str, user_id: str = Depends(require_user)):
+    """Delete a user chat session"""
+    if not SESSION_ID.match(session_id):
+        raise HTTPException(status_code=404, detail="session_not_found")
+    await ensure_tables()
+    if not ghost.chat_store:
+        raise HTTPException(status_code=500, detail="chat_store_disabled")
+
+    ok = await ghost.chat_store.delete_session(session_id, user_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    return {"ok": True}
+
 
 app.include_router(ghost_router)
 

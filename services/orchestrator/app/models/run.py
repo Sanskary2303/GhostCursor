@@ -74,6 +74,7 @@ class RunState:
             questions=response_data.get("questions"),
             actions=response_data.get("actions"),
             toolCalls=response_data.get("toolCalls"),
+            loopbackSignature=response_data.get("loopbackSignature"),
         )
 
     def to_agent_context(self) -> Dict[str, Any]:

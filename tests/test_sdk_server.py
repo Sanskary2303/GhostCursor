@@ -18,9 +18,29 @@ from ghost_cursor import (
     BrainLoader,
     ToolRegistry,
     GatewayError,
+    loopback_key,
+    canonical_tool_calls,
+    sign_tool_batch,
+    verify_tool_batch,
 )
 from ghost_cursor.proxy import GatewayLoopback, GhostCursorConfig
 from ghost_cursor.tools import BackendTool, FrontendActionTool
+
+
+def make_mock_awaiting_tools(backend, run_id, revision, tool_calls, reply="Executing..."):
+    key = loopback_key(backend.config.api_key)
+    sig = sign_tool_batch(key, backend.config.tenant_id, run_id, revision, tool_calls)
+    return {
+        "protocolVersion": "1",
+        "runId": run_id,
+        "revision": revision,
+        "status": "awaiting_tools",
+        "reply": reply,
+        "questions": None,
+        "actions": None,
+        "toolCalls": tool_calls,
+        "loopbackSignature": sig,
+    }
 
 
 class SampleQuery(BaseModel):
@@ -809,22 +829,13 @@ async def test_assistant_tool_calls_recorded_without_outputs():
         nonlocal step
         step += 1
         if step == 1:
-            return httpx.Response(200, json={
-                "protocolVersion": "1",
-                "runId": run_id,
-                "revision": 1,
-                "status": "awaiting_tools",
-                "reply": "Looking up your order...",
-                "questions": None,
-                "actions": None,
-                "toolCalls": [
-                    {
-                        "id": "tc_order_1",
-                        "tool": "lookup_order",
-                        "parameters": {"order_id": "SH-101"},
-                    }
-                ],
-            })
+            return httpx.Response(200, json=make_mock_awaiting_tools(
+                backend,
+                run_id,
+                1,
+                [{"id": "tc_order_1", "tool": "lookup_order", "parameters": {"order_id": "SH-101"}}],
+                reply="Looking up your order...",
+            ))
         else:
             return httpx.Response(200, json={
                 "protocolVersion": "1",
@@ -1074,16 +1085,13 @@ async def test_too_many_tool_calls_in_one_plan():
             {"id": f"tc_{i}", "tool": "lookup", "parameters": {}}
             for i in range(5)
         ]
-        return httpx.Response(200, json={
-            "protocolVersion": "1",
-            "runId": run_id,
-            "revision": 1,
-            "status": "awaiting_tools",
-            "reply": "Executing tools...",
-            "questions": None,
-            "actions": None,
-            "toolCalls": tool_calls,
-        })
+        return httpx.Response(200, json=make_mock_awaiting_tools(
+            backend,
+            run_id,
+            1,
+            tool_calls,
+            reply="Executing tools...",
+        ))
 
     backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
@@ -1155,19 +1163,17 @@ async def test_argument_validation_pydantic_and_dict():
                 "questions": None,
                 "actions": None,
             })
-        return httpx.Response(200, json={
-            "protocolVersion": "1",
-            "runId": run_id,
-            "revision": 1,
-            "status": "awaiting_tools",
-            "reply": "Executing...",
-            "questions": None,
-            "actions": None,
-            "toolCalls": [
-                {"id": "tc_pydantic", "tool": "lookup_pydantic", "parameters": {}},  # missing required order_id
-                {"id": "tc_dict", "tool": "lookup_dict", "parameters": {"sku": "S1", "quantity": "not_an_int"}},  # invalid type
-            ],
-        })
+        tool_calls = [
+            {"id": "tc_pydantic", "tool": "lookup_pydantic", "parameters": {}},  # missing required order_id
+            {"id": "tc_dict", "tool": "lookup_dict", "parameters": {"sku": "S1", "quantity": "not_an_int"}},  # invalid type
+        ]
+        return httpx.Response(200, json=make_mock_awaiting_tools(
+            backend,
+            run_id,
+            1,
+            tool_calls,
+            reply="Executing...",
+        ))
 
     backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
@@ -1223,18 +1229,13 @@ async def test_tool_context_idempotency_key():
                 "questions": None,
                 "actions": None,
             })
-        return httpx.Response(200, json={
-            "protocolVersion": "1",
-            "runId": run_id,
-            "revision": 1,
-            "status": "awaiting_tools",
-            "reply": "Executing...",
-            "questions": None,
-            "actions": None,
-            "toolCalls": [
-                {"id": "tc_idem_1", "tool": "test_context_tool", "parameters": {}},
-            ],
-        })
+        return httpx.Response(200, json=make_mock_awaiting_tools(
+            backend,
+            run_id,
+            1,
+            [{"id": "tc_idem_1", "tool": "test_context_tool", "parameters": {}}],
+            reply="Executing...",
+        ))
 
     backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
@@ -1286,18 +1287,13 @@ async def test_tool_timeout():
                 "questions": None,
                 "actions": None,
             })
-        return httpx.Response(200, json={
-            "protocolVersion": "1",
-            "runId": run_id,
-            "revision": 1,
-            "status": "awaiting_tools",
-            "reply": "Executing...",
-            "questions": None,
-            "actions": None,
-            "toolCalls": [
-                {"id": "tc_slow", "tool": "sleepy_tool", "parameters": {}},
-            ],
-        })
+        return httpx.Response(200, json=make_mock_awaiting_tools(
+            backend,
+            run_id,
+            1,
+            [{"id": "tc_slow", "tool": "sleepy_tool", "parameters": {}}],
+            reply="Executing...",
+        ))
 
     backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
 
@@ -1981,6 +1977,247 @@ async def test_background_summary_unreachable_orchestrator_falls_back_to_heurist
     sess = await store.get_session(session_id, "user_fail")
     assert sess.title == "Looking for running shoes step 1"
     assert "Looking for running shoes" in sess.summary
+
+
+def test_loopback_fixed_parity_vector():
+    """Verify exact parity vector for HKDF-derived loopback signing."""
+    api_key = "test-key-shophive-demo-0123456789abcdef"
+    tenant = "shophive_demo"
+    ts = 1700000000
+    run_id = "r1"
+    revision = 2
+    tool_calls = [{"id": "c1", "tool": "lookup_order", "parameters": {"order_id": "SH-1024"}}]
+
+    key = loopback_key(api_key)
+    assert key.hex() == "8392dd6329e8ba2ce5fa8b87549948f8c7bd0f0220b6a318b4b3d105f2d20c8f"
+
+    canonical = canonical_tool_calls(tool_calls)
+    assert canonical == '[{"id":"c1","parameters":{"order_id":"SH-1024"},"tool":"lookup_order"}]'
+
+    sig_payload = sign_tool_batch(key, tenant, run_id, revision, tool_calls, ts=ts)
+    assert sig_payload == {
+        "v": 1,
+        "ts": 1700000000,
+        "sig": "4a76b8e7cdf3b27ee025e5205c3a6f95a9e26cc0ecbe96b31dafc6fae1edd7f4",
+    }
+
+    assert verify_tool_batch(key, tenant, run_id, revision, tool_calls, sig_payload, now=1700000000) is True
+
+
+@pytest.mark.asyncio
+async def test_gateway_loopback_signature_verification_and_tamper_rejection():
+    """Gateway verifies loopbackSignature before dispatching tools; fails closed on any mismatch without calling tools."""
+    tool_called = False
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="shophive_demo",
+    )
+
+    @backend.register_tool(
+        name="lookup_order",
+        description="Lookup order",
+        schema={"type": "object", "properties": {"order_id": {"type": "string"}}},
+    )
+    def lookup_order(order_id: str):
+        nonlocal tool_called
+        tool_called = True
+        return {"status": "ok"}
+
+    run_id = str(uuid.uuid4())
+    tool_calls = [{"id": "tc_1", "tool": "lookup_order", "parameters": {"order_id": "SH-1024"}}]
+    key = loopback_key(backend.config.api_key)
+    valid_sig = sign_tool_batch(key, "shophive_demo", run_id, 1, tool_calls)
+
+    # 1. Missing signature -> 502 bad_tool_signature
+    tool_called = False
+    def mock_missing_sig(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Checking...",
+            "toolCalls": tool_calls,
+            "loopbackSignature": None,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_missing_sig))
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "check order",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }, "user_1")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "bad_tool_signature"
+    assert tool_called is False
+
+    # 2. Tampered tool parameters -> 502 bad_tool_signature
+    tool_called = False
+    def mock_tampered_params(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Checking...",
+            "toolCalls": [{"id": "tc_1", "tool": "lookup_order", "parameters": {"order_id": "SH-9999"}}],
+            "loopbackSignature": valid_sig,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_tampered_params))
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "check order",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }, "user_1")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "bad_tool_signature"
+    assert tool_called is False
+
+    # 3. Wrong tenant -> 502 bad_tool_signature
+    tool_called = False
+    wrong_tenant_sig = sign_tool_batch(key, "other_tenant", run_id, 1, tool_calls)
+    def mock_wrong_tenant(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Checking...",
+            "toolCalls": tool_calls,
+            "loopbackSignature": wrong_tenant_sig,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_wrong_tenant))
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "check order",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }, "user_1")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "bad_tool_signature"
+    assert tool_called is False
+
+    # 4. Wrong revision -> 502 bad_tool_signature
+    tool_called = False
+    replayed_sig = sign_tool_batch(key, "shophive_demo", run_id, 0, tool_calls)
+    def mock_replayed(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Checking...",
+            "toolCalls": tool_calls,
+            "loopbackSignature": replayed_sig,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_replayed))
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "check order",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }, "user_1")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "bad_tool_signature"
+    assert tool_called is False
+
+    # 5. Expired timestamp (> 300s old) -> 502 bad_tool_signature
+    tool_called = False
+    expired_sig = sign_tool_batch(key, "shophive_demo", run_id, 1, tool_calls, ts=int(time.time()) - 305)
+    def mock_expired(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Checking...",
+            "toolCalls": tool_calls,
+            "loopbackSignature": expired_sig,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_expired))
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "check order",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }, "user_1")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "bad_tool_signature"
+    assert tool_called is False
+
+    # 6. Invalid version v != 1 -> 502 bad_tool_signature
+    tool_called = False
+    bad_v_sig = dict(valid_sig, v=2)
+    def mock_bad_v(req):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 1,
+            "status": "awaiting_tools",
+            "reply": "Checking...",
+            "toolCalls": tool_calls,
+            "loopbackSignature": bad_v_sig,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_bad_v))
+    with pytest.raises(GatewayError) as exc_info:
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": "check order",
+            "context": {"page": "orders", "values": {}, "availableTargets": []},
+        }, "user_1")
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "bad_tool_signature"
+    assert tool_called is False
+
+    # 7. Valid signature succeeds and calls tool
+    tool_called = False
+    step = 0
+    def mock_valid(req):
+        nonlocal step
+        step += 1
+        if step == 1:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 1,
+                "status": "awaiting_tools",
+                "reply": "Checking...",
+                "toolCalls": tool_calls,
+                "loopbackSignature": valid_sig,
+            })
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 2,
+            "status": "completed",
+            "reply": "Found it",
+            "questions": None,
+            "actions": None,
+        })
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_valid))
+    res = await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "check order",
+        "context": {"page": "orders", "values": {}, "availableTargets": []},
+    }, "user_1")
+    assert res["status"] == "completed"
+    assert tool_called is True
+    assert "loopbackSignature" not in res
 
 
 

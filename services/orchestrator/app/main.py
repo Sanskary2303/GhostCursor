@@ -47,7 +47,7 @@ from .tools.frontend_actions import FRONTEND_ACTION_TOOLS, FRONTEND_TOOL_NAMES, 
 from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore, RunBusyError
 from .llm.vertex import BaseVertexClient, MockVertexAIClient, ProviderError
 from .llm.gemini import GeminiProvider, prune_transcript
-from .tools.loopback import GatewayLoopbackHandler
+from .tools.loopback import GatewayLoopbackHandler, loopback_key, sign_tool_batch
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -266,6 +266,8 @@ async def verify_tenant_credentials(
     if not matched_tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
+    request.state.api_key = api_key
+
     # Validate subject format if provided
     if x_ghost_subject is not None:
         if not (1 <= len(x_ghost_subject) <= 120):
@@ -403,6 +405,18 @@ async def create_run(
         _register_pending(response, run_state)
         response.revision = 0
 
+        # Sign tool calls if awaiting_tools
+        if response.status == "awaiting_tools" and response.toolCalls:
+            api_key = getattr(http_request.state, "api_key", None)
+            if api_key:
+                response.loopbackSignature = sign_tool_batch(
+                    key=loopback_key(api_key),
+                    tenant=tenant_id,
+                    run_id=response.runId,
+                    revision=response.revision,
+                    tool_calls=response.toolCalls,
+                )
+
         # Update run state with response
         run_state.status = response.status
         run_state.latest_reply = response.reply
@@ -503,6 +517,18 @@ async def continue_run(
 
             _register_pending(response, run_state)
             response.revision = target_revision
+
+            # Sign tool calls if awaiting_tools
+            if response.status == "awaiting_tools" and response.toolCalls:
+                api_key = getattr(http_request.state, "api_key", None)
+                if api_key:
+                    response.loopbackSignature = sign_tool_batch(
+                        key=loopback_key(api_key),
+                        tenant=tenant_id,
+                        run_id=response.runId,
+                        revision=response.revision,
+                        tool_calls=response.toolCalls,
+                    )
 
             # Update run state
             run_state.status = response.status

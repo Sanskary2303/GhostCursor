@@ -267,6 +267,7 @@ class HostedRunResponse(BaseModel):
     questions: Optional[List[ClarifyQuestion]] = None
     actions: Optional[List[Dict[str, Any]]] = None
     toolCalls: Optional[List[ToolCallRequest]] = None
+    loopbackSignature: Optional[Dict[str, Any]] = None
 
     @model_validator(mode="after")
     def validate_discrete_plan(self):

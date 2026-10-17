@@ -8,6 +8,7 @@ This guide covers production operations for Ghost Cursor.
 
 - [Threat Model](#threat-model)
 - [Production Checklist](#production-checklist)
+- [HMAC-Signed Tool Loopback Protocol](#hmac-signed-tool-loopback-protocol)
 - [Dependency Management](#dependency-management)
 - [Troubleshooting](#troubleshooting)
 - [Retention and Deletion](#retention-and-deletion)
@@ -98,6 +99,43 @@ GHOST_CURSOR_BRAIN_DIR=./brain
    - Rate limiting (60 req/min)
    - Origin header rejection
    - CSP headers
+
+---
+
+## HMAC-Signed Tool Loopback Protocol
+
+To securely execute customer backend tools locally on customer infrastructure without exposing write keys or accepting forged tool calls, the orchestrator and gateways enforce an HMAC-SHA256 signature protocol on all `awaiting_tools` dispatches:
+
+### Key Derivation
+The loopback key is derived separately from the customer API key using HKDF-SHA256 (RFC 5869):
+```
+loopback_key = HKDF-SHA256(ikm=api_key, salt="", info="ghost-loopback-v1", length=32)
+```
+This isolates the bearer API key (used for server-to-server auth) from tool call authentication.
+
+### Message & Signature Format
+Before sending tool calls to the customer gateway, the orchestrator constructs a canonical message:
+```
+message = "{tenant}.{timestamp}.{runId}.{revision}.{canonical_json(toolCalls)}"
+signature = HMAC-SHA256(loopback_key, message).hexdigest()
+```
+where `canonical_json` recursively sorts object keys with separators `(",", ":")` and UTF-8 encoding.
+The signature is attached to the internal response:
+```json
+"loopbackSignature": {
+  "v": 1,
+  "ts": 1700000000,
+  "sig": "<hex_signature>"
+}
+```
+
+### Gateway Verification & Replay Protection
+Customer gateways (Python and Node.js SDKs) verify the signature prior to dispatching any tool execution:
+1. `loopbackSignature` must be present and contain `v == 1`.
+2. `ts` must fall within $\pm 300$ seconds of the gateway's current clock.
+3. Message HMAC matches in constant time (`hmac.compare_digest` / `crypto.timingSafeEqual`).
+4. Any mismatch (expired timestamp, tampered parameters, mismatched tenant, wrong revision, or missing signature) fails closed immediately with `502 bad_tool_signature`. Tools are never executed on invalid signatures.
+5. The signature is internal to the backend proxy: the browser-facing public projection automatically drops `loopbackSignature`.
 
 ---
 

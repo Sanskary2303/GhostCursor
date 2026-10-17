@@ -155,6 +155,23 @@ async def test_create_run_awaiting_tools_and_continue_flow(auth_headers):
         assert data["status"] == "awaiting_tools"
         assert len(data["toolCalls"]) > 0
         assert data["toolCalls"][0]["tool"] == "lookup_order"
+        assert "loopbackSignature" in data
+        assert data["loopbackSignature"] is not None
+        assert data["loopbackSignature"]["v"] == 1
+        assert "sig" in data["loopbackSignature"]
+        assert "ts" in data["loopbackSignature"]
+
+        from services.orchestrator.app.tools.loopback import loopback_key, verify_tool_batch
+        api_key = auth_headers["Authorization"].split(" ")[1]
+        assert verify_tool_batch(
+            key=loopback_key(api_key),
+            tenant="shophive_demo",
+            run_id=data["runId"],
+            revision=data["revision"],
+            tool_calls=data["toolCalls"],
+            signature_payload=data["loopbackSignature"],
+        ) is True
+
         run_id = data["runId"]
         tool_call_id = data["toolCalls"][0]["id"]
 

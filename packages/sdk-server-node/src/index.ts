@@ -5,7 +5,7 @@
  * with Node.js/Express/Fastify backends.
  */
 
-import { randomUUID } from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import {
   BrowserContext,
   BrowserRequest,
@@ -46,6 +46,7 @@ export interface Tool {
 export interface GatewayOptions {
   serviceUrl: string;
   serviceKey: string;
+  tenantId?: string;
   loadBrain: ((subject: string, context: BrowserContext) => Promise<string> | string) | string;
   capabilities?: ((subject: string) => Promise<string[]> | string[]) | string[];
   tools?:
@@ -74,6 +75,65 @@ interface HostedRunResponse {
   questions?: Array<Record<string, any>> | null;
   actions?: Array<Record<string, any>> | null;
   toolCalls?: HostedToolCall[];
+  loopbackSignature?: { v?: number; ts?: number; sig?: string } | null;
+}
+
+export function canonicalJson(val: any): string {
+  if (val === null || typeof val !== "object") {
+    return JSON.stringify(val);
+  }
+  if (Array.isArray(val)) {
+    return "[" + val.map(canonicalJson).join(",") + "]";
+  }
+  const keys = Object.keys(val).sort();
+  return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalJson(val[k])).join(",") + "}";
+}
+
+export function loopbackKey(serviceKey: string): Buffer {
+  return Buffer.from(crypto.hkdfSync("sha256", serviceKey, Buffer.alloc(0), "ghost-loopback-v1", 32));
+}
+
+export function signToolBatch(
+  key: Buffer,
+  tenant: string,
+  runId: string,
+  revision: number,
+  toolCalls: any[],
+  ts?: number
+): { v: number; ts: number; sig: string } {
+  const timestamp = ts ?? Math.floor(Date.now() / 1000);
+  const canonical = canonicalJson(toolCalls);
+  const msg = `${tenant}.${timestamp}.${runId}.${revision}.${canonical}`;
+  const sig = crypto.createHmac("sha256", key).update(msg).digest("hex");
+  return { v: 1, ts: timestamp, sig };
+}
+
+export function verifyToolBatch(
+  key: Buffer,
+  tenant: string,
+  runId: string,
+  revision: number,
+  toolCalls: any[],
+  signaturePayload?: { v?: number; ts?: number; sig?: string } | null,
+  now?: number,
+  maxAgeSeconds = 300
+): boolean {
+  if (!signaturePayload || typeof signaturePayload !== "object") return false;
+  if (signaturePayload.v !== 1) return false;
+  const ts = signaturePayload.ts;
+  const sig = signaturePayload.sig;
+  if (typeof ts !== "number" || !Number.isInteger(ts) || typeof sig !== "string") return false;
+  const currentNow = now ?? Math.floor(Date.now() / 1000);
+  if (Math.abs(currentNow - ts) > maxAgeSeconds) return false;
+
+  const canonical = canonicalJson(toolCalls);
+  const msg = `${tenant}.${ts}.${runId}.${revision}.${canonical}`;
+  const expectedSig = crypto.createHmac("sha256", key).update(msg).digest("hex");
+
+  const expBuf = Buffer.from(expectedSig, "hex");
+  const gotBuf = Buffer.from(sig, "hex");
+  if (expBuf.length !== gotBuf.length || expBuf.length === 0) return false;
+  return crypto.timingSafeEqual(expBuf, gotBuf);
 }
 
 export function validateServiceUrl(rawUrl: string, insecureHttpHosts: string[] = []): string {
@@ -173,6 +233,8 @@ function matchesSchema(schema: any, value: any): boolean {
 export class Gateway {
   private readonly serviceUrl: string;
   private readonly serviceKey: string;
+  private readonly tenantId: string;
+  private readonly loopbackKey: Buffer;
   private readonly loadBrain: ((subject: string, context: BrowserContext) => Promise<string> | string) | string;
   private readonly capabilities?: ((subject: string) => Promise<string[]> | string[]) | string[];
   private readonly tools?:
@@ -191,6 +253,8 @@ export class Gateway {
 
     this.serviceUrl = validateServiceUrl(options.serviceUrl, options.insecureHttpHosts);
     this.serviceKey = options.serviceKey;
+    this.tenantId = options.tenantId || "shophive_demo";
+    this.loopbackKey = loopbackKey(this.serviceKey);
     this.loadBrain = options.loadBrain;
     this.capabilities = options.capabilities;
     this.tools = options.tools;
@@ -349,6 +413,20 @@ export class Gateway {
     while (hostedResponse.toolCalls && hostedResponse.toolCalls.length > 0 && rounds < MAX_TOOL_ROUNDS) {
       rounds++;
       const toolCalls = hostedResponse.toolCalls;
+
+      // Verify HMAC loopback signature before executing local tools
+      const valid = verifyToolBatch(
+        this.loopbackKey,
+        this.tenantId,
+        hostedResponse.runId,
+        hostedResponse.revision,
+        toolCalls,
+        hostedResponse.loopbackSignature
+      );
+      if (!valid) {
+        throw new GatewayError(502, "bad_tool_signature");
+      }
+
       const toolResults: Array<{ id: string; ok: boolean; output?: any; error?: string }> = [];
 
       if (toolCalls.length > MAX_TOOL_CALLS_PER_ROUND) {

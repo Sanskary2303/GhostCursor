@@ -1,5 +1,14 @@
 import { describe, it, expect, vi } from "vitest";
-import { Gateway, GatewayError, BRAIN_CANARY, validateServiceUrl } from "../src/index.js";
+import {
+  Gateway,
+  GatewayError,
+  BRAIN_CANARY,
+  validateServiceUrl,
+  loopbackKey,
+  signToolBatch,
+  verifyToolBatch,
+  canonicalJson,
+} from "../src/index.js";
 
 const VALID_UUID_1 = "123e4567-e89b-12d3-a456-426614174000";
 const VALID_UUID_2 = "987fcdeb-51a2-43f7-9876-ba9876543210";
@@ -177,6 +186,15 @@ describe("Gateway Execution and Error Handling", () => {
       callCount++;
       if (callCount === 1) {
         expect(url).toBe("http://localhost:8080/v1/runs");
+        const toolCalls = [
+          {
+            id: "call_check_order",
+            tool: "lookup_order",
+            parameters: { orderId: "SH-1024" },
+          },
+        ];
+        const key = loopbackKey("test-secret-key");
+        const sig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
         return new Response(
           JSON.stringify({
             protocolVersion: "1",
@@ -184,13 +202,8 @@ describe("Gateway Execution and Error Handling", () => {
             revision: 1,
             status: "awaiting_tools",
             reply: "Checking order...",
-            toolCalls: [
-              {
-                id: "call_check_order",
-                tool: "lookup_order",
-                parameters: { orderId: "SH-1024" },
-              },
-            ],
+            toolCalls,
+            loopbackSignature: sig,
           }),
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
@@ -365,6 +378,9 @@ describe("Gateway Execution and Error Handling", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      const toolCalls = [{ id: "c1", tool: "huge_tool", parameters: {} }];
+      const key = loopbackKey("test-key");
+      const sig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
       return new Response(
         JSON.stringify({
           protocolVersion: "1",
@@ -372,7 +388,8 @@ describe("Gateway Execution and Error Handling", () => {
           revision: 1,
           status: "awaiting_tools",
           reply: "Executing",
-          toolCalls: [{ id: "c1", tool: "huge_tool", parameters: {} }],
+          toolCalls,
+          loopbackSignature: sig,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -422,6 +439,15 @@ describe("Gateway Execution and Error Handling", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      const toolCalls = [
+        { id: "t1", tool: "tool_1" },
+        { id: "t2", tool: "tool_2" },
+        { id: "t3", tool: "tool_3" },
+        { id: "t4", tool: "tool_4" },
+        { id: "t5", tool: "tool_5" },
+      ];
+      const key = loopbackKey("test-key");
+      const sig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
       return new Response(
         JSON.stringify({
           protocolVersion: "1",
@@ -429,13 +455,8 @@ describe("Gateway Execution and Error Handling", () => {
           revision: 1,
           status: "awaiting_tools",
           reply: "Running 5 tools",
-          toolCalls: [
-            { id: "t1", tool: "tool_1" },
-            { id: "t2", tool: "tool_2" },
-            { id: "t3", tool: "tool_3" },
-            { id: "t4", tool: "tool_4" },
-            { id: "t5", tool: "tool_5" },
-          ],
+          toolCalls,
+          loopbackSignature: sig,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -595,6 +616,9 @@ describe("Gateway Execution and Error Handling", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      const toolCalls = [{ id: "t_hang_1", tool: "hanging_tool", parameters: {} }];
+      const key = loopbackKey("test-key");
+      const sig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
       return new Response(
         JSON.stringify({
           protocolVersion: "1",
@@ -602,7 +626,8 @@ describe("Gateway Execution and Error Handling", () => {
           revision: 1,
           status: "awaiting_tools",
           reply: "Running hanging tool",
-          toolCalls: [{ id: "t_hang_1", tool: "hanging_tool", parameters: {} }],
+          toolCalls,
+          loopbackSignature: sig,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -659,6 +684,9 @@ describe("Gateway Execution and Error Handling", () => {
           { status: 200, headers: { "Content-Type": "application/json" } },
         );
       }
+      const toolCalls = [{ id: "t_invalid_1", tool: "strict_tool", parameters: { order_id: 5 } }];
+      const key = loopbackKey("test-key");
+      const sig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
       return new Response(
         JSON.stringify({
           protocolVersion: "1",
@@ -666,7 +694,8 @@ describe("Gateway Execution and Error Handling", () => {
           revision: 1,
           status: "awaiting_tools",
           reply: "Validating args",
-          toolCalls: [{ id: "t_invalid_1", tool: "strict_tool", parameters: { order_id: 5 } }],
+          toolCalls,
+          loopbackSignature: sig,
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
@@ -709,5 +738,247 @@ describe("Gateway Execution and Error Handling", () => {
       ok: false,
       error: "invalid arguments",
     });
+  });
+});
+
+describe("Gateway Loopback HMAC Signing and Verification", () => {
+  it("matches the exact fixed parity vector", () => {
+    const apiKey = "test-key-shophive-demo-0123456789abcdef";
+    const tenant = "shophive_demo";
+    const ts = 1700000000;
+    const runId = "r1";
+    const revision = 2;
+    const toolCalls = [{ id: "c1", tool: "lookup_order", parameters: { order_id: "SH-1024" } }];
+
+    const key = loopbackKey(apiKey);
+    expect(key.toString("hex")).toBe("8392dd6329e8ba2ce5fa8b87549948f8c7bd0f0220b6a318b4b3d105f2d20c8f");
+
+    const canonical = canonicalJson(toolCalls);
+    expect(canonical).toBe('[{"id":"c1","parameters":{"order_id":"SH-1024"},"tool":"lookup_order"}]');
+
+    const sigPayload = signToolBatch(key, tenant, runId, revision, toolCalls, ts);
+    expect(sigPayload).toEqual({
+      v: 1,
+      ts: 1700000000,
+      sig: "4a76b8e7cdf3b27ee025e5205c3a6f95a9e26cc0ecbe96b31dafc6fae1edd7f4",
+    });
+
+    expect(verifyToolBatch(key, tenant, runId, revision, toolCalls, sigPayload, 1700000000)).toBe(true);
+  });
+
+  it("verifies loopbackSignature before dispatching tools and rejects tampered or invalid signatures", async () => {
+    const mockExecute = vi.fn().mockResolvedValue({ status: "ok" });
+    const toolCalls = [{ id: "tc_1", tool: "lookup_order", parameters: { order_id: "SH-1024" } }];
+    const apiKey = "test-key-shophive-demo-0123456789abcdef";
+    const key = loopbackKey(apiKey);
+    const validSig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
+
+    // 1. Missing signature -> throws 502 bad_tool_signature
+    let fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Checking...",
+          toolCalls,
+          loopbackSignature: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: apiKey,
+      tenantId: "shophive_demo",
+      loadBrain: "# Brain",
+      tools: {
+        lookup_order: { description: "Lookup order", execute: mockExecute },
+      },
+      fetch: vi.fn().mockImplementation(async () => fetchHandler()),
+    });
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "check order",
+      })
+    ).rejects.toThrow("bad_tool_signature");
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // 2. Tampered tool parameters -> throws 502 bad_tool_signature
+    fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Checking...",
+          toolCalls: [{ id: "tc_1", tool: "lookup_order", parameters: { order_id: "SH-9999" } }],
+          loopbackSignature: validSig,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "check order",
+      })
+    ).rejects.toThrow("bad_tool_signature");
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // 3. Wrong tenant -> throws 502 bad_tool_signature
+    const wrongTenantSig = signToolBatch(key, "other_tenant", VALID_UUID_1, 1, toolCalls);
+    fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Checking...",
+          toolCalls,
+          loopbackSignature: wrongTenantSig,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "check order",
+      })
+    ).rejects.toThrow("bad_tool_signature");
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // 4. Wrong revision -> throws 502 bad_tool_signature
+    const replayedSig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 0, toolCalls);
+    fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Checking...",
+          toolCalls,
+          loopbackSignature: replayedSig,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "check order",
+      })
+    ).rejects.toThrow("bad_tool_signature");
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // 5. Expired timestamp (> 300s old) -> throws 502 bad_tool_signature
+    const expiredSig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls, Math.floor(Date.now() / 1000) - 305);
+    fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Checking...",
+          toolCalls,
+          loopbackSignature: expiredSig,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "check order",
+      })
+    ).rejects.toThrow("bad_tool_signature");
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // 6. Invalid version v != 1 -> throws 502 bad_tool_signature
+    const badVSig = { ...validSig, v: 2 };
+    fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 1,
+          status: "awaiting_tools",
+          reply: "Checking...",
+          toolCalls,
+          loopbackSignature: badVSig,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    await expect(
+      gateway.handle("user_1", {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "check order",
+      })
+    ).rejects.toThrow("bad_tool_signature");
+    expect(mockExecute).not.toHaveBeenCalled();
+
+    // 7. Valid signature succeeds and executes tool
+    let callNum = 0;
+    fetchHandler = () => {
+      callNum++;
+      if (callNum === 1) {
+        return new Response(
+          JSON.stringify({
+            protocolVersion: "1",
+            runId: VALID_UUID_1,
+            revision: 1,
+            status: "awaiting_tools",
+            reply: "Checking...",
+            toolCalls,
+            loopbackSignature: validSig,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 2,
+          status: "completed",
+          reply: "Order found",
+          questions: null,
+          actions: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    };
+
+    const result = await gateway.handle("user_1", {
+      command: "start",
+      protocolVersion: "1",
+      requestId: VALID_UUID_1,
+      message: "check order",
+    });
+
+    expect(result.status).toBe("completed");
+    expect(mockExecute).toHaveBeenCalled();
+    expect((result as any).loopbackSignature).toBeUndefined();
   });
 });

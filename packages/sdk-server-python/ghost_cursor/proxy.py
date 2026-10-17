@@ -186,11 +186,105 @@ class HostedRunResponse(BaseModel):
     questions: Optional[List[Dict[str, Any]]] = None
     actions: Optional[List[Dict[str, Any]]] = None
     toolCalls: Optional[List[ToolCallRequest]] = None
+    loopbackSignature: Optional[Dict[str, Any]] = None
 
 
 # ============================================================================
 # Gateway Loopback Protocol
 # ============================================================================
+
+def hkdf_extract(salt: bytes, ikm: bytes) -> bytes:
+    if not salt:
+        salt = b"\x00" * 32
+    return hmac.new(salt, ikm, hashlib.sha256).digest()
+
+
+def hkdf_expand(prk: bytes, info: bytes, length: int = 32) -> bytes:
+    t = b""
+    okm = b""
+    i = 1
+    while len(okm) < length:
+        t = hmac.new(prk, t + info + bytes([i]), hashlib.sha256).digest()
+        okm += t
+        i += 1
+    return okm[:length]
+
+
+def hkdf_sha256(ikm: bytes, salt: bytes = b"", info: bytes = b"", length: int = 32) -> bytes:
+    """RFC 5869 HKDF-SHA256 key derivation function."""
+    prk = hkdf_extract(salt, ikm)
+    return hkdf_expand(prk, info, length)
+
+
+def loopback_key(api_key: str) -> bytes:
+    """Derive 32-byte loopback key from customer API key via HKDF-SHA256."""
+    return hkdf_sha256(api_key.encode("utf-8"), salt=b"", info=b"ghost-loopback-v1", length=32)
+
+
+def canonical_tool_calls(tool_calls: Any) -> str:
+    """Format tool calls as canonical JSON (recursive sorted keys, separators (',', ':'), ensure_ascii=False)."""
+    def _to_plain(obj: Any) -> Any:
+        if hasattr(obj, "model_dump"):
+            return _to_plain(obj.model_dump())
+        if isinstance(obj, dict):
+            return {k: _to_plain(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_to_plain(item) for item in obj]
+        return obj
+
+    plain = _to_plain(tool_calls)
+    return json.dumps(plain, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def sign_tool_batch(
+    key: bytes,
+    tenant: str,
+    run_id: str,
+    revision: int,
+    tool_calls: Any,
+    ts: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Sign a batch of tool calls with HMAC-SHA256."""
+    if ts is None:
+        ts = int(time.time())
+    canonical = canonical_tool_calls(tool_calls)
+    message = f"{tenant}.{ts}.{run_id}.{revision}.{canonical}".encode("utf-8")
+    sig = hmac.new(key, message, hashlib.sha256).hexdigest()
+    return {
+        "v": 1,
+        "ts": ts,
+        "sig": sig,
+    }
+
+
+def verify_tool_batch(
+    key: bytes,
+    tenant: str,
+    run_id: str,
+    revision: int,
+    tool_calls: Any,
+    signature_payload: Optional[Dict[str, Any]],
+    now: Optional[int] = None,
+    max_age_seconds: int = 300,
+) -> bool:
+    """Verify HMAC-SHA256 signature on an incoming tool batch."""
+    if not signature_payload or not isinstance(signature_payload, dict):
+        return False
+    if signature_payload.get("v") != 1:
+        return False
+    ts = signature_payload.get("ts")
+    sig = signature_payload.get("sig")
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)) or not isinstance(sig, str):
+        return False
+    ts_int = int(ts)
+    if now is None:
+        now = int(time.time())
+    if abs(now - ts_int) > max_age_seconds:
+        return False
+    canonical = canonical_tool_calls(tool_calls)
+    message = f"{tenant}.{ts_int}.{run_id}.{revision}.{canonical}".encode("utf-8")
+    expected = hmac.new(key, message, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, sig)
 
 class GatewayLoopback:
     """
@@ -429,6 +523,19 @@ class GhostCursorBackend:
                 rounds += 1
                 for tc in response.toolCalls:
                     executed_tool_calls.append({"id": tc.id, "tool": tc.tool})
+
+                # Verify HMAC loopback signature before executing local tools
+                key = loopback_key(self.config.api_key)
+                if not verify_tool_batch(
+                    key=key,
+                    tenant=self.config.tenant_id,
+                    run_id=response.runId,
+                    revision=response.revision,
+                    tool_calls=response.toolCalls,
+                    signature_payload=response.loopbackSignature,
+                ):
+                    raise GatewayError(502, "bad_tool_signature")
+
                 tool_results = await self._execute_local_tools(
                     response.runId,
                     response.revision,

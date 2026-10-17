@@ -7,8 +7,9 @@ Maintains approval and loopback control by disabling automatic function calling.
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from google import genai
 from google.genai import types
 
@@ -142,4 +143,42 @@ class GeminiProvider(BaseVertexClient):
 
         # 4. Parse response with shared strict rules
         return parse_model_response(response, run_context)
+
+    async def summarize(self, messages: List[Dict[str, str]]) -> Tuple[str, str]:
+        """
+        Generate title and summary using Gemini 2.0 with JSON output mode.
+        Falls back to heuristic on any error or invalid response.
+        """
+        try:
+            convo_text = "\n".join([f"{m.get('role', 'user')}: {m.get('text', '')}" for m in messages])
+            prompt = (
+                f"Conversation:\n{convo_text}\n\n"
+                'Return JSON {"title": <=6 words, "summary": <=2 sentences}:'
+            )
+            config = types.GenerateContentConfig(
+                temperature=0.2,
+                response_mime_type="application/json",
+            )
+            response = await self.client.aio.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=config,
+            )
+            text = getattr(response, "text", "") or ""
+            data = json.loads(text)
+            if isinstance(data, dict):
+                title = data.get("title")
+                summary = data.get("summary")
+                if (
+                    isinstance(title, str)
+                    and isinstance(summary, str)
+                    and len(title) <= 60
+                    and len(summary) <= 300
+                ):
+                    return title.strip(), summary.strip()
+            logger.warning(f"Invalid summary output from Gemini: {data}")
+        except Exception as e:
+            logger.warning(f"Gemini summarization failed, falling back to heuristic: {e}")
+
+        return await super().summarize(messages)
 

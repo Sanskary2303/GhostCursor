@@ -16,12 +16,12 @@ import re
 import time
 import uuid
 from contextlib import asynccontextmanager
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from fastapi import FastAPI, Request, HTTPException, Depends, Header, APIRouter
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from .agent import create_ghost_agent, GhostAgent
 from .models.run import RunStore, RunState, RunStatus
@@ -35,6 +35,7 @@ from .models.contracts import (
     MAX_TURNS,
     ToolDeclaration,
     validate_actions,
+    BRAIN_CANARY,
 )
 
 EXPECTED_KINDS = {
@@ -239,14 +240,17 @@ async def security_and_limits_middleware(request: Request, call_next):
 
 async def verify_tenant_credentials(
     request: Request,
-    authorization: str = Header(...),
-    x_ghost_subject: str = Header(..., alias="X-Ghost-Subject"),
-) -> Tuple[str, str]:
+    authorization: Optional[str] = Header(None),
+    x_ghost_subject: Optional[str] = Header(None, alias="X-Ghost-Subject"),
+) -> Tuple[str, Optional[str]]:
     """
     Verify server-to-server credentials and extract tenant/subject.
 
     Expected format: Authorization: Bearer <api_key>
     """
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
     if not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Invalid authorization format")
 
@@ -262,12 +266,13 @@ async def verify_tenant_credentials(
     if not matched_tenant:
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # Validate subject format
-    if not x_ghost_subject or not (1 <= len(x_ghost_subject) <= 120):
-        raise HTTPException(status_code=400, detail="Invalid X-Ghost-Subject")
+    # Validate subject format if provided
+    if x_ghost_subject is not None:
+        if not (1 <= len(x_ghost_subject) <= 120):
+            raise HTTPException(status_code=400, detail="Invalid X-Ghost-Subject")
 
-    if not re.match(r'^[a-zA-Z0-9_.:@-]+$', x_ghost_subject):
-        raise HTTPException(status_code=400, detail="Invalid subject format")
+        if not re.match(r'^[a-zA-Z0-9_.:@-]+$', x_ghost_subject):
+            raise HTTPException(status_code=400, detail="Invalid subject format")
 
     return matched_tenant, x_ghost_subject
 
@@ -311,7 +316,7 @@ def _register_pending(response: HostedRunResponse, run_state: RunState) -> None:
 async def create_run(
     request: HostedCreateRunRequest,
     http_request: Request,
-    tenant_subject: Tuple[str, str] = Depends(verify_tenant_credentials),
+    tenant_subject: Tuple[str, Optional[str]] = Depends(verify_tenant_credentials),
 ):
     """
     Create a new run or deduplicate existing one.
@@ -320,6 +325,8 @@ async def create_run(
     reject_origin_requests(http_request)
 
     tenant_id, subject = tenant_subject
+    if not subject:
+        raise HTTPException(status_code=400, detail="Invalid X-Ghost-Subject")
     store = _get_store(http_request)
     provider = _get_provider(http_request)
 
@@ -431,7 +438,7 @@ async def continue_run(
     run_id: str,
     request: HostedContinueRunRequest,
     http_request: Request,
-    tenant_subject: Tuple[str, str] = Depends(verify_tenant_credentials),
+    tenant_subject: Tuple[str, Optional[str]] = Depends(verify_tenant_credentials),
 ):
     """
     Continue an existing run with tool results, action results, or user answer.
@@ -439,6 +446,8 @@ async def continue_run(
     reject_origin_requests(http_request)
 
     tenant_id, subject = tenant_subject
+    if not subject:
+        raise HTTPException(status_code=400, detail="Invalid X-Ghost-Subject")
     store = _get_store(http_request)
     provider = _get_provider(http_request)
 
@@ -519,6 +528,57 @@ async def continue_run(
     except Exception as e:
         logger.error(f"Error continuing run: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class SummaryMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    role: Literal["user", "assistant"]
+    text: str = Field(..., max_length=2000)
+
+
+class SummaryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    messages: List[SummaryMessage] = Field(..., max_length=40)
+
+
+class SummaryResponse(BaseModel):
+    title: str
+    summary: str
+
+
+@router.post("/v1/summaries", response_model=SummaryResponse)
+async def create_summary(
+    request: SummaryRequest,
+    http_request: Request,
+    tenant_subject: Tuple[str, Optional[str]] = Depends(verify_tenant_credentials),
+):
+    """
+    Stateless endpoint to generate a title and summary for a conversation transcript.
+    Server-to-server only - requires tenant API key.
+    """
+    reject_origin_requests(http_request)
+
+    total_len = sum(len(m.text) for m in request.messages)
+    if total_len > 8000:
+        raise HTTPException(
+            status_code=413,
+            detail="Payload too large: total message text exceeds 8000 characters",
+        )
+
+    provider = _get_provider(http_request)
+    messages_payload = [{"role": m.role, "text": m.text} for m in request.messages]
+
+    try:
+        title, summary = await provider.summarize(messages_payload)
+    except Exception as e:
+        logger.warning(f"Summarization error: {e}")
+        from .llm.vertex import heuristic_summary
+        title, summary = heuristic_summary(messages_payload)
+
+    if BRAIN_CANARY in title or BRAIN_CANARY in summary:
+        raise HTTPException(status_code=502, detail="disclosure_blocked")
+
+    return SummaryResponse(title=title, summary=summary)
 
 
 # ============================================================================

@@ -280,6 +280,7 @@ class GhostCursorBackend:
         self.tool_registry = ToolRegistry()
         self.loopback = GatewayLoopback(config.tenant_id, config.api_key)
         self.chat_store = config.chat_store
+        self._background: set = set()
 
     async def _get_http_client(self) -> httpx.AsyncClient:
         """Get a new HTTP client instance"""
@@ -744,15 +745,69 @@ class GhostCursorBackend:
 
             user_turns = await self.chat_store.count_turns(session_id, user_id)
             if user_turns > 0 and user_turns % 4 == 0:
-                summary, title = await self.chat_store.generate_summary_and_title(session_id, user_id)
-                await self.chat_store.update_session_metadata(
-                    session_id=session_id,
-                    user_id=user_id,
-                    title=title,
-                    summary=summary,
-                )
+                task = asyncio.create_task(self.summarize_session(session_id, user_id))
+                self._background.add(task)
+                task.add_done_callback(self._background.discard)
         except Exception as e:
             logger.warning(f"Failed to persist chat turn: {e}")
+
+    async def summarize_session(self, session_id: str, user_id: str) -> None:
+        """Background worker that calls orchestrator /v1/summaries, falling back to heuristic."""
+        if not self.chat_store:
+            return
+        try:
+            messages = await self.chat_store.get_messages(session_id, user_id)
+            convo = [{"role": m.role, "text": m.content} for m in messages if m.role in ("user", "assistant")]
+            if not convo:
+                return
+
+            title: Optional[str] = None
+            summary: Optional[str] = None
+            try:
+                base_url = self.config.service_url.rstrip("/")
+                if base_url.endswith("/v1/runs"):
+                    base_url = base_url[:-len("/v1/runs")]
+                elif base_url.endswith("/v1"):
+                    base_url = base_url[:-len("/v1")]
+                url = f"{base_url}/v1/summaries"
+                headers = {
+                    "Authorization": f"Bearer {self.config.api_key}",
+                    "X-Ghost-Subject": user_id,
+                    "Content-Type": "application/json",
+                }
+                raw_client = self._get_http_client()
+                client = await raw_client if inspect.isawaitable(raw_client) else raw_client
+                async with client:
+                    resp = await client.post(
+                        url,
+                        json={"messages": convo[-40:]},
+                        headers=headers,
+                        timeout=self.config.request_timeout,
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        if isinstance(data, dict):
+                            t = data.get("title")
+                            s = data.get("summary")
+                            if isinstance(t, str) and isinstance(s, str):
+                                title = t
+                                summary = s
+            except Exception as e:
+                logger.warning(f"Failed to fetch summary from orchestrator: {type(e).__name__}")
+
+            if not title or not summary:
+                s_heur, t_heur = await self.chat_store.generate_summary_and_title(session_id, user_id)
+                title = title or t_heur
+                summary = summary or s_heur
+
+            await self.chat_store.update_session_metadata(
+                session_id=session_id,
+                user_id=user_id,
+                title=title,
+                summary=summary,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to summarize session {session_id}: {type(e).__name__}")
 
     def _project_public_response(self, response: HostedRunResponse) -> Dict[str, Any]:
         """Project internal response to public envelope (exclude internals)"""

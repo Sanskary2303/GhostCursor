@@ -1515,6 +1515,83 @@ def test_create_app_uses_provided_store_and_factory():
     assert run_id in custom._runs
 
 
+@pytest.mark.asyncio
+async def test_summaries_three_messages_returns_title_le_6_words(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "messages": [
+                {"role": "user", "text": "Can you help me switch ShopHive to dark mode please?"},
+                {"role": "assistant", "text": "Sure, I'll switch to dark mode for you."},
+                {"role": "user", "text": "Thank you very much!"},
+            ]
+        }
+        res = await client.post("/v1/summaries", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert "title" in data
+        assert "summary" in data
+        words = data["title"].split()
+        assert len(words) <= 6
+        assert len(data["summary"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_summaries_401_without_key():
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "messages": [
+                {"role": "user", "text": "Hello world"},
+            ]
+        }
+        res = await client.post("/v1/summaries", json=payload)
+        assert res.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_summaries_422_bad_role_or_extra_keys(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # role: "system"
+        res_system = await client.post(
+            "/v1/summaries",
+            json={"messages": [{"role": "system", "text": "You are a helpful assistant"}]},
+            headers=auth_headers,
+        )
+        assert res_system.status_code == 422
+
+        # extra key on message
+        res_extra_msg = await client.post(
+            "/v1/summaries",
+            json={"messages": [{"role": "user", "text": "Hi", "unknown_field": "val"}]},
+            headers=auth_headers,
+        )
+        assert res_extra_msg.status_code == 422
+
+        # extra key on top-level payload
+        res_extra_top = await client.post(
+            "/v1/summaries",
+            json={"messages": [{"role": "user", "text": "Hi"}], "extra": 123},
+            headers=auth_headers,
+        )
+        assert res_extra_top.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_summaries_413_exceeds_character_limit(auth_headers):
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        payload = {
+            "messages": [
+                {"role": "user", "text": "x" * 1800} for _ in range(5)
+            ]
+        }
+        res = await client.post("/v1/summaries", json=payload, headers=auth_headers)
+        assert res.status_code == 413
+
+
+
 
 
 

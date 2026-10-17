@@ -8,7 +8,7 @@ import copy
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from abc import ABC, abstractmethod
 
 from ..agent import GhostAgent
@@ -20,6 +20,23 @@ logger = logging.getLogger(__name__)
 class ProviderError(Exception):
     """Raised when an LLM provider encounters an error communicating with the model."""
     pass
+
+
+def heuristic_summary(messages: List[Dict[str, str]]) -> Tuple[str, str]:
+    """Heuristic fallback for conversation title and summary based on user requests."""
+    user_msgs = [
+        (m.get("text") or m.get("content") or "").strip()
+        for m in messages
+        if (m.get("role") or "").lower() == "user"
+    ]
+    user_msgs = [m for m in user_msgs if m]
+    if not user_msgs:
+        return "New Conversation", "New Conversation"
+
+    words = user_msgs[0].split()
+    title = " ".join(words[:6]) if words else "New Conversation"
+    summary = "; ".join(user_msgs)[:200]
+    return title, summary
 
 
 class BaseVertexClient(ABC):
@@ -34,6 +51,10 @@ class BaseVertexClient(ABC):
         transcript: Optional[List[Dict[str, Any]]] = None,
     ) -> HostedRunResponse:
         pass
+
+    async def summarize(self, messages: List[Dict[str, str]]) -> Tuple[str, str]:
+        """Generate title and summary for a conversation transcript."""
+        return heuristic_summary(messages)
 
 
 def parse_model_response(

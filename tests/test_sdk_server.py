@@ -916,11 +916,16 @@ async def test_session_auto_summary_after_four_user_turns():
     turns = await store.count_turns(session_id, "user_dan")
     assert turns == 4
 
+    if backend._background:
+        await asyncio.gather(*backend._background)
+
     # Now verify summary and title were updated
     updated_session = await store.get_session(session_id, "user_dan")
     assert updated_session is not None
     assert updated_session.summary is not None
     assert len(updated_session.summary) > 0
+    await engine.dispose()
+
 
 
 # ============================================================================
@@ -1823,6 +1828,160 @@ async def test_persist_turn_calculates_token_count():
     assert asst_msg.token_count > 0
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_reply_returns_before_background_summary_completes():
+    """Turn 4 reply returns immediately while background summary task runs concurrently"""
+    store = InMemoryChatStore(tenant_id="tenant_summary_bg")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_summary_bg",
+    )
+    backend.attach_chat_store(store)
+
+    run_id = str(uuid.uuid4())
+    gate = asyncio.Event()
+
+    def mock_transport_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/summaries"):
+            # Sleep synchronously or block in async transport?
+            # MockTransport handler can be async if transport is async
+            pass
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 0,
+            "status": "completed",
+            "reply": "Assistant reply",
+            "questions": None,
+            "actions": None,
+        })
+
+    # Since httpx.MockTransport supports async handler:
+    async def async_mock_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/summaries"):
+            await gate.wait()
+            return httpx.Response(200, json={
+                "title": "Background Title",
+                "summary": "Background model summary sentence one. Sentence two.",
+            })
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 0,
+            "status": "completed",
+            "reply": "Assistant reply",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(async_mock_handler))
+
+    # Turn 1
+    t1 = await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "First user message about buying shoes",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_bg")
+    assert t1["status"] == "completed"
+    sessions = await store.list_sessions("user_bg")
+    session_id = sessions[0].session_id
+
+    # Turns 2 & 3
+    for i in (2, 3):
+        await backend.handle_turn({
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "sessionId": session_id,
+            "message": f"User turn {i}",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }, "user_bg")
+
+    # Turn 4: triggers background summary
+    t4 = await backend.handle_turn({
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session_id,
+        "message": "User turn 4 triggers summary",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }, "user_bg")
+
+    # The turn returned immediately!
+    assert t4["status"] == "completed"
+
+    # Background task is in flight and blocked on gate
+    assert len(backend._background) > 0
+    current_session = await store.get_session(session_id, "user_bg")
+    assert current_session.title != "Background Title"
+    assert current_session.summary is None
+
+    # Now unblock background task
+    gate.set()
+    await asyncio.gather(*backend._background)
+
+    updated_session = await store.get_session(session_id, "user_bg")
+    assert updated_session.title == "Background Title"
+    assert updated_session.summary == "Background model summary sentence one. Sentence two."
+
+
+@pytest.mark.asyncio
+async def test_background_summary_unreachable_orchestrator_falls_back_to_heuristic():
+    """If orchestrator /v1/summaries fails, background task falls back to heuristic without raising"""
+    store = InMemoryChatStore(tenant_id="tenant_fail_orch")
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="tenant_fail_orch",
+    )
+    backend.attach_chat_store(store)
+
+    run_id = str(uuid.uuid4())
+
+    async def async_mock_handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/v1/summaries"):
+            raise httpx.ConnectError("Connection refused")
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 0,
+            "status": "completed",
+            "reply": "Assistant reply",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(async_mock_handler))
+
+    session_id = None
+    for i in range(1, 5):
+        payload = {
+            "command": "start",
+            "protocolVersion": "1",
+            "requestId": str(uuid.uuid4()),
+            "message": f"Looking for running shoes step {i}",
+            "context": {"page": "home", "values": {}, "availableTargets": []},
+        }
+        if session_id:
+            payload["sessionId"] = session_id
+        res = await backend.handle_turn(payload, "user_fail")
+        assert res["status"] == "completed"
+        if not session_id:
+            sess_list = await store.list_sessions("user_fail")
+            session_id = sess_list[0].session_id
+
+    # Wait for background task to finish
+    if backend._background:
+        await asyncio.gather(*backend._background)
+
+    # Verify fallback heuristic title and summary are saved
+    sess = await store.get_session(session_id, "user_fail")
+    assert sess.title == "Looking for running shoes step 1"
+    assert "Looking for running shoes" in sess.summary
+
 
 
 

@@ -399,22 +399,17 @@ class SQLAlchemyChatStore(ChatStore):
             result = await session.execute(query)
             messages = result.scalars().all()
 
-            # Generate simple summary and title from content
-            if not messages:
+            user_msgs = [
+                msg.content.strip()
+                for msg in messages
+                if msg.role == "user" and msg.content and msg.content.strip()
+            ]
+            if not user_msgs:
                 return "Conversation", "New Conversation"
 
-            # Combine content for analysis
-            full_text = " ".join([msg.content for msg in messages if msg.role == "assistant"])
-
-            # Simple heuristics for demo
-            word_count = len(full_text.split())
-            summary = full_text[:200] + "..." if word_count > 50 else full_text
-            title = full_text.split("\n\n")[0][:50] if full_text else "New Conversation"
-
-            # Update session
-            session_result.summary = summary
-            await session.commit()
-
+            words = user_msgs[0].split()
+            title = " ".join(words[:6]) if words else "New Conversation"
+            summary = "; ".join(user_msgs)[:200]
             return summary, title
 
     async def update_session_metadata(
@@ -575,13 +570,16 @@ class InMemoryChatStore(ChatStore):
         if not session:
             raise ValueError(f"Session not found or unauthorized: {session_id}")
         msgs = self._messages.get(session_id, [])
-        if not msgs:
+        user_msgs = [
+            m.content.strip()
+            for m in msgs
+            if m.role == "user" and m.content and m.content.strip()
+        ]
+        if not user_msgs:
             return "Conversation", "New Conversation"
-        full_text = " ".join([m.content for m in msgs if m.role == "assistant"])
-        summary = full_text[:200] + "..." if len(full_text.split()) > 50 else full_text
-        title = full_text.split("\n\n")[0][:50] if full_text else "New Conversation"
-        session.summary = summary
-        session.title = title
+        words = user_msgs[0].split()
+        title = " ".join(words[:6]) if words else "New Conversation"
+        summary = "; ".join(user_msgs)[:200]
         return summary, title
 
     async def update_session_metadata(

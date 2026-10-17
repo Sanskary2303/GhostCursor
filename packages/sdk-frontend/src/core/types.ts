@@ -43,6 +43,8 @@ export interface Target {
   commit?: 'input' | 'change' | 'blur';
   execute?: (element: HTMLElement, action: Action, signal: AbortSignal) => Promise<void>;
   verify?: (action: Action, signal: AbortSignal) => Promise<boolean>;
+  /** Human-readable name shown in plan cards, e.g. "Dark mode switch". */
+  label?: string;
 }
 
 export type TargetOperation = 'click' | 'fill' | 'select' | 'toggle' | 'navigate' | 'observe';

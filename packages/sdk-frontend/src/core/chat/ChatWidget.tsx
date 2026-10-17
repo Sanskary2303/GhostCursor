@@ -9,6 +9,8 @@ import { BrandCursor } from './BrandCursor';
 import { WIDGET_CSS } from './widgetStyles';
 import { BRAND } from '../cursor/assets';
 import { prefersDarkScheme, resolveMode, tokensFor, tokensToCss } from '../theme/tokens';
+import { ACTION_ICONS, describeAction } from './describe';
+import type { Action } from '../types';
 
 export interface Message {
   id: string;
@@ -345,7 +347,6 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
           position: 'fixed',
           ...positionStyle,
           zIndex: 99999,
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
         <style>{this.css}</style>
@@ -379,13 +380,13 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             <div
               role="log"
               aria-live="polite"
-              style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}
+              className="gc-log"
             >
               {messages.length === 0 ? (
-                <div style={{ textAlign: 'center', color: '#6b7280', margin: 'auto 0', padding: '20px' }}>
-                  <div style={{ fontSize: '32px', marginBottom: '8px' }}>👻</div>
-                  <div style={{ fontWeight: 600, fontSize: '15px', color: '#111827', marginBottom: '4px' }}>Ghost Cursor Assistant</div>
-                  <div style={{ fontSize: '13px', lineHeight: 1.4 }}>Ask me to help you navigate, find products, add to cart, or track orders!</div>
+                <div className="gc-empty">
+                  <div className="gc-empty-mark"><BrandCursor width={26} accent={this.tokens.accent} /></div>
+                  <div className="gc-empty-title">How can I help?</div>
+                  <div>Ask me to find products, add to cart, change settings or show you around.</div>
                 </div>
               ) : (
                 messages.map(message => (
@@ -411,22 +412,14 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
             {/* Error Display */}
             {error && (
-              <div style={{
-                padding: '12px 16px',
-                background: '#fef2f2',
-                border: '1px solid #fecaca',
-                borderRadius: '8px',
-                color: '#dc2626',
-                fontSize: '13px',
-                margin: '0 16px 16px',
-              }}>
+              <div className="gc-error" role="alert">
                 {error}
               </div>
             )}
 
             {/* Input Area */}
-            <form onSubmit={this.handleSendMessage} style={{ padding: '16px', borderTop: '1px solid #e5e7eb' }}>
-              <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-end' }}>
+            <form onSubmit={this.handleSendMessage} className="gc-composer">
+              <div className="gc-input-row">
                 <textarea
                   ref={this.inputRef}
                   value={inputValue}
@@ -436,39 +429,14 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   }}
                   placeholder="Ask me anything..."
                   disabled={isLoading || isExecutingActions}
-                  style={{
-                    flex: 1,
-                    minHeight: '44px',
-                    maxHeight: '120px',
-                    padding: '10px 14px',
-                    border: '1px solid #d1d5db',
-                    borderRadius: '12px',
-                    fontSize: '14px',
-                    fontFamily: 'inherit',
-                    resize: 'none',
-                    outline: 'none',
-                    lineHeight: 1.5,
-                  }}
+                  className="gc-input"
                   aria-label="Message input"
                 />
                 {isExecutingActions ? (
                   <button
                     type="button"
                     onClick={this.handleStop}
-                    style={{
-                      height: '44px',
-                      padding: '0 16px',
-                      borderRadius: '12px',
-                      background: '#ef4444',
-                      border: 'none',
-                      color: 'white',
-                      fontWeight: 600,
-                      fontSize: '13px',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '6px',
-                    }}
+                    className="gc-stop"
                     aria-label="Stop"
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -480,22 +448,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   <button
                     type="submit"
                     disabled={!inputValue.trim() || isLoading}
-                    style={{
-                      width: '44px',
-                      height: '44px',
-                      borderRadius: '12px',
-                      background: inputValue.trim() && !isLoading ? theme.primaryColor : '#d1d5db',
-                      border: 'none',
-                      color: 'white',
-                      cursor: inputValue.trim() && !isLoading ? 'pointer' : 'not-allowed',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      transition: 'background 0.2s',
-                    }}
+                    className="gc-send"
                     aria-label="Send message"
                   >
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
                       <line x1="22" y1="2" x2="11" y2="13"></line>
                       <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
                     </svg>
@@ -503,9 +459,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                 )}
               </div>
               {requireApprovalForActions && (
-                <div style={{ marginTop: '8px', fontSize: '11px', color: '#6b7280', textAlign: 'center' }}>
-                  Actions require your approval before execution
-                </div>
+                <div className="gc-hint">Actions need your approval before they run</div>
               )}
             </form>
           </div>
@@ -530,58 +484,21 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
 interface MessageBubbleProps {
   message: Message;
-  theme: ChatWidgetProps['theme'];
+  theme?: ChatWidgetProps['theme'];
   onOptionSelect: (option: string) => void;
 }
 
-const MessageBubble = ({ message, theme, onOptionSelect }: MessageBubbleProps) => {
+const MessageBubble = ({ message, onOptionSelect }: MessageBubbleProps) => {
   const isUser = message.role === 'user';
-
+  const showTyping = !isUser && message.isStreaming && !message.content;
   return (
-    <div style={{
-      display: 'flex',
-      justifyContent: isUser ? 'flex-end' : 'flex-start',
-      animation: 'ghost-fade-in 0.3s ease-out',
-    }}>
-      <div style={{
-        maxWidth: '85%',
-        padding: isUser ? '12px 16px' : '12px 16px',
-        background: isUser ? theme.primaryColor : '#f3f4f6',
-        borderRadius: isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-        color: isUser ? 'white' : '#1a1a2e',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
-      }}>
-        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', lineHeight: 1.5 }}>
-          {message.content}
-        </div>
-
+    <div className={`gc-msg ${isUser ? 'gc-msg--user' : 'gc-msg--assistant'}`}>
+      <div className="gc-bubble">
+        {showTyping ? <span className="gc-typing" aria-label="Assistant is typing"><i /><i /><i /></span> : message.content}
         {message.questions && message.questions.length > 0 && (
-          <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <div className="gc-options">
             {message.questions.flatMap(q => q.options.map(opt => (
-              <button
-                key={opt}
-                onClick={() => onOptionSelect(opt)}
-                style={{
-                  padding: '10px 14px',
-                  background: isUser ? 'rgba(255,255,255,0.2)' : 'white',
-                  border: isUser ? '1px solid rgba(255,255,255,0.3)' : '1px solid #d1d5db',
-                  borderRadius: '8px',
-                  color: isUser ? 'white' : '#1a1a2e',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  textAlign: 'left',
-                  transition: 'all 0.2s',
-                }}
-                onMouseEnter={e => {
-                  e.currentTarget.style.background = isUser ? 'rgba(255,255,255,0.3)' : '#f9fafb';
-                }}
-                onMouseLeave={e => {
-                  e.currentTarget.style.background = isUser ? 'rgba(255,255,255,0.2)' : 'white';
-                }}
-              >
-                {opt}
-              </button>
+              <button key={opt} type="button" className="gc-option" onClick={() => onOptionSelect(opt)}>{opt}</button>
             )))}
           </div>
         )}
@@ -593,96 +510,32 @@ const MessageBubble = ({ message, theme, onOptionSelect }: MessageBubbleProps) =
 interface ActionApprovalPanelProps {
   actions: any[];
   onApprove: (approved: boolean) => void;
-  theme: ChatWidgetProps['theme'];
+  theme?: ChatWidgetProps['theme'];
 }
 
-const ActionApprovalPanel = ({ actions, onApprove, theme }: ActionApprovalPanelProps) => {
-  const actionLabels: Record<string, string> = {
-    navigate: 'Navigate to',
-    click: 'Click',
-    fill_input: 'Fill input',
-    select_option: 'Select option',
-    toggle_switch: 'Toggle',
-    guided_tour: 'Start tour',
-  };
-
-  return (
-    <div style={{
-      padding: '16px',
-      background: '#fefce8',
-      borderTop: '1px solid #fde047',
-      borderBottom: '1px solid #fde047',
-    }}>
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '8px',
-        marginBottom: '12px',
-        fontWeight: 600,
-        color: '#854d0e',
-      }}>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-          <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-        </svg>
-        Confirm Actions
-      </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-        {actions.map((action, index) => (
-          <div key={index} style={{
-            padding: '10px 12px',
-            background: 'white',
-            border: '1px solid #fde047',
-            borderRadius: '8px',
-            fontSize: '13px',
-            color: '#374151',
-          }}>
-            <span style={{ fontWeight: 600, color: theme.primaryColor }}>
-              {actionLabels[action.type] || action.type}
-            </span>
-            {' '}
-            {action.target_id && `“${action.target_id}”`}
-            {action.target_page && ` → ${action.target_page}`}
-            {action.value && ` = "${action.value}"`}
-            {action.explanation && (
-              <span style={{ color: '#6b7280', marginLeft: '8px' }}>— {action.explanation}</span>
-            )}
-          </div>
-        ))}
-      </div>
-      <div style={{ display: 'flex', gap: '8px', marginTop: '16px' }}>
-        <button
-          onClick={() => onApprove(false)}
-          style={{
-            flex: 1,
-            padding: '10px 16px',
-            background: 'white',
-            border: '1px solid #d1d5db',
-            borderRadius: '8px',
-            color: '#374151',
-            fontWeight: 500,
-            cursor: 'pointer',
-          }}
-        >
-          Cancel
-        </button>
-        <button
-          onClick={() => onApprove(true)}
-          style={{
-            flex: 1,
-            padding: '10px 16px',
-            background: theme.primaryColor,
-            border: 'none',
-            borderRadius: '8px',
-            color: 'white',
-            fontWeight: 500,
-            cursor: 'pointer',
-          }}
-        >
-          Approve and Run
-        </button>
-      </div>
+const ActionApprovalPanel = ({ actions, onApprove }: ActionApprovalPanelProps) => (
+  <div className="gc-plan" role="group" aria-label="Proposed plan">
+    <div className="gc-plan-head">
+      <span>PLAN</span>
+      <span>{actions.length} {actions.length === 1 ? 'STEP' : 'STEPS'}</span>
     </div>
-  );
-};
+    <ol className="gc-plan-list">
+      {actions.map((action: Action, index: number) => (
+        <li key={action.id ?? index} className="gc-plan-step">
+          <span className="gc-plan-num">{index + 1}</span>
+          <span className="gc-plan-icon" aria-hidden="true">{ACTION_ICONS[action.type] ?? '•'}</span>
+          <div>
+            <div className="gc-plan-text">{describeAction(action)}</div>
+            {action.explanation && <div className="gc-plan-why">{action.explanation}</div>}
+          </div>
+        </li>
+      ))}
+    </ol>
+    <div className="gc-plan-actions">
+      <button type="button" className="gc-btn gc-btn--ghost" onClick={() => onApprove(false)}>Cancel</button>
+      <button type="button" className="gc-btn gc-btn--primary" onClick={() => onApprove(true)}>Approve and Run</button>
+    </div>
+  </div>
+);
 
 export { MessageBubble, ActionApprovalPanel };

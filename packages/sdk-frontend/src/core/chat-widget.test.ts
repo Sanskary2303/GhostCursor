@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { h, render } from 'preact';
-import { ChatWidget } from './chat/ChatWidget';
+import { ChatWidget, type ChatWidgetProps } from './chat/ChatWidget';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -8,7 +8,7 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-function mount() {
+function mount(props?: Partial<ChatWidgetProps>) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = host.attachShadow({ mode: 'open' });
@@ -19,6 +19,7 @@ function mount() {
     initialContext: { page: 'home', values: {}, availableTargets: [] },
     onSendMessage: async () => ({ reply: 'ok', status: 'completed', runId: 'r', revision: 0 }),
     onActionApproval: async () => null,
+    ...props,
   }), root);
   return { host, root };
 }
@@ -48,6 +49,40 @@ describe('ChatWidget shell', () => {
     expect(panel.textContent).toContain('AI COMPANION FOR THE WEB');
     expect(root.querySelector('.gc-status')!.textContent).toBe('Online');
     expect(root.querySelector('[aria-label="Close chat"]')).not.toBeNull();
+  });
+
+  it('renders the plan card when actions await approval', async () => {
+    const { root } = mount({
+      onSendMessage: async () => ({
+        reply: 'Plan',
+        status: 'awaiting_actions',
+        runId: 'r',
+        revision: 0,
+        actions: [{ id: 'a1', type: 'toggle_switch', target_id: 'theme.toggle', state: true, explanation: 'Turn it on' }],
+      }),
+    });
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const textarea = root.querySelector('textarea.gc-input') as HTMLTextAreaElement;
+    textarea.value = 'Turn on dark mode';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    const form = root.querySelector('form.gc-composer') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    await tick();
+    await tick();
+    await tick();
+
+    const plan = root.querySelector('.gc-plan')!;
+    expect(plan).not.toBeNull();
+    expect(plan.textContent).toContain('Turn toggle ON');
+    expect(plan.textContent).toContain('Turn it on');
+    expect(plan.textContent).toContain('Cancel');
+    expect(plan.textContent).toContain('Approve and Run');
+    expect(plan.textContent).not.toContain('theme.toggle');
   });
 });
 

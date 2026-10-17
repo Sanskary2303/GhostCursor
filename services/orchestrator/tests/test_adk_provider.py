@@ -474,3 +474,4 @@ async def test_adk_provider_live():
     )
 
     assert response.status in ("awaiting_actions", "completed")
+

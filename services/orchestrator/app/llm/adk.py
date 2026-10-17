@@ -308,3 +308,4 @@ class ADKProvider(BaseVertexClient):
     async def close(self) -> None:
         """Release cached runners."""
         self._runners.clear()
+

@@ -3,6 +3,7 @@
 // Core SDK factory
 export { createGhostCursor } from './core/SDK';
 export type { GhostCursorSDK, CreateGhostCursorOptions } from './core/SDK';
+export { defineGhostCursorElement } from './core/element';
 
 // Core types
 export * from './core/types';

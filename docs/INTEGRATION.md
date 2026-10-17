@@ -50,6 +50,8 @@ function App() {
 }
 ```
 
+> **Note:** The widget mounts as a `<ghost-cursor-widget id="ghost-cursor-widget-container">` custom element. Importing `@ghost-cursor/sdk-react/dist/index.css` provides base host reset styles and pointer-events guards.
+
 ### Vanilla JS Integration
 
 ```html
@@ -96,6 +98,7 @@ from ghost_cursor import GhostCursorBackend, SQLAlchemyChatStore
 app = FastAPI()
 
 # Initialize Ghost Cursor
+# (Both `ghost_cursor` and `ghost_cursor.backend` / `ghost_cursor.backend.storage` imports are supported)
 ghost = GhostCursorBackend(
     api_key=os.environ["GHOST_CURSOR_API_KEY"],
     tenant_id=os.environ["GHOST_CURSOR_TENANT_ID"],
@@ -337,13 +340,15 @@ npm run dev -- --port 3000
 ```
 
 ### Test a User Flow
-
+ 
 1. Open `http://localhost:3000` in your browser
 2. Click the Ghost Cursor chat widget
 3. Type: "Add the Air Max 90 in size 10 to my cart"
 4. Verify Ghost cursor appears and animates to the product
 5. Click "Approve and Run"
 6. Verify the item is added to cart
+ 
+Automated browser tests can also be run with `npm run test:browser`.
 
 ---
 

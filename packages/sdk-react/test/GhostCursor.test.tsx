@@ -95,5 +95,12 @@ describe('@ghost-cursor/sdk-react', () => {
       delete (global as any).window;
     }
   });
+
+  it('resolves @ghost-cursor/sdk-react/dist/index.css export', async () => {
+    const { createRequire } = await import('module');
+    const require = createRequire(import.meta.url);
+    const resolved = require.resolve('@ghost-cursor/sdk-react/dist/index.css');
+    expect(resolved).toContain('packages/sdk-react/dist/index.css');
+  });
 });
 

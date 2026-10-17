@@ -12,6 +12,7 @@ import { BRAND } from './cursor/assets';
 import type { ThemeMode } from './theme/tokens';
 import { describeAction } from './chat/describe';
 import { createHistoryClient } from './history';
+import { defineGhostCursorElement } from './element';
 
 const SESSION_STORAGE_KEY = 'ghost-cursor.session';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -39,6 +40,7 @@ function setStoredSessionId(id: string | null): void {
 }
 
 export interface GhostCursorSDK {
+  readonly host?: HTMLElement;
   dispose(): void;
   sendMessage(message: string): Promise<void>;
   executeActions(actions: Action[], token?: string): Promise<PublicResponse | null>;
@@ -183,6 +185,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   });
 
   // Mount widget
+  defineGhostCursorElement();
   let widgetContainer: HTMLElement;
   if (mount) {
     widgetContainer = mount;
@@ -195,7 +198,8 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     if (existing) {
       widgetContainer = existing;
     } else {
-      widgetContainer = document.createElement('div');
+      const tag = typeof customElements !== 'undefined' ? 'ghost-cursor-widget' : 'div';
+      widgetContainer = document.createElement(tag);
       widgetContainer.id = 'ghost-cursor-widget-container';
       document.body.appendChild(widgetContainer);
     }
@@ -514,6 +518,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   transport.connect().catch(err => console.error('[GhostCursor] Initial connection failed:', err));
 
   return {
+    host: widgetContainer,
     dispose,
     sendMessage,
     executeActions,
@@ -534,3 +539,4 @@ export * from './engine/TourEngine';
 export * from './chat/ChatWidget';
 export * from './context/ContextProvider';
 export * from './transport/Transport';
+export * from './element';

@@ -1,0 +1,9 @@
+ghost-cursor-widget {
+  all: initial;
+}
+
+#ghost-cursor-overlay,
+#ghost-cursor-rings {
+  pointer-events: none;
+}
+

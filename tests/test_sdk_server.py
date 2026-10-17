@@ -2324,6 +2324,19 @@ async def test_first_turn_updates_heuristic_title_when_default():
     assert updated_session.title == "What sizes are available in store"
 
 
+def test_act_packaging_backend_exports():
+    """ACT §8.3 / §9.4 backend module imports parity."""
+    from ghost_cursor.backend import GhostCursorBackend, GatewayError
+    from ghost_cursor.backend.storage import SQLAlchemyChatStore, InMemoryChatStore, ChatStore
+
+    assert GhostCursorBackend is not None
+    assert GatewayError is not None
+    assert SQLAlchemyChatStore is not None
+    assert InMemoryChatStore is not None
+    assert ChatStore is not None
+
+
+
 
 
 

@@ -20,6 +20,7 @@
     "schemas": "npm run generate:schemas --workspace=packages/sdk-frontend",
     "build:e2e": "npm run build --workspace=packages/sdk-frontend && npm run build --workspace=packages/sdk-react && VITE_E2E_HOOKS=1 npm run build --workspace=demo/shophive/frontend",
     "test:e2e": "npm run build:e2e && playwright test -c e2e",
+    "test:browser": "npm run test:e2e",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist demo/*/frontend/node_modules demo/*/frontend/dist services/orchestrator/venv"
   },
   "workspaces": [

@@ -86,6 +86,7 @@ test('tracking question runs a tour on the orders page', async ({ page }) => {
   // Step 1: Click Next
   const nextBtn = page.locator('#ghost-tour-next');
   await expect(nextBtn).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('#ghost-cursor-overlay')).toHaveAttribute('data-gc-cursor-state', /aiming|acting/);
   await expect(nextBtn).toHaveText('Next');
   await nextBtn.click();
 

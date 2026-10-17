@@ -119,6 +119,10 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       activeRing = null;
       await cursor.flyTo(element);
       if (info.signal.aborted) return;
+      if (info.tour) {
+        cursor.setCaption(`Tour ${info.tour.index + 1}/${info.tour.total}`);
+        return; // the tour draws its own spotlight, so no ring
+      }
       activeRing = cursor.highlight(element);
       cursor.setCaption(`${info.index + 1}/${info.total} • ${describeAction(info.action)}`);
     },

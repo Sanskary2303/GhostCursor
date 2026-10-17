@@ -15,6 +15,7 @@ export interface StepInfo {
   total: number;
   /** Aborted when the user presses Stop. */
   signal: AbortSignal;
+  tour?: { index: number; total: number };
 }
 
 export interface ExecutionOptions {
@@ -158,7 +159,7 @@ async function executeAction(
         return await executeToggleSwitch(target_id!, state!, options, info);
 
       case 'guided_tour':
-        return await executeGuidedTour(steps || [], options, info.signal);
+        return await executeGuidedTour(steps || [], options, info);
 
       case 'ask_clarification':
         return await executeAskClarification(action.question!, action.options!, options);
@@ -416,7 +417,7 @@ async function executeToggleSwitch(
 async function executeGuidedTour(
   steps: any[],
   options: Required<ExecutionOptions>,
-  signal?: AbortSignal
+  info: StepInfo
 ): Promise<ToolResult> {
   options.onProgress('guided_tour', 'executing');
 
@@ -437,8 +438,10 @@ async function executeGuidedTour(
     const tour = new TourEngine({
       onComplete: () => finish(true),
       onSkip: () => finish(false),
+      onStepShown: (index, element) => options.onAim(element, { ...info, tour: { index, total: steps.length } }),
     });
 
+    const signal = info.signal;
     if (signal) {
       if (signal.aborted) {
         tour.stop().catch(() => {});

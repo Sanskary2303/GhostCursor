@@ -12,14 +12,17 @@ export interface TourOptions {
   onSkip?: () => void;
   spotlightColor?: string;
   spotlightOpacity?: number;
+  /** Awaited after the spotlight is placed and before the tooltip shows. Fly the cursor here. */
+  onStepShown?: (index: number, element: HTMLElement, step: TourStep) => Promise<void> | void;
 }
 
 const DEFAULT_OPTIONS: Required<TourOptions> = {
   onStepChange: () => {},
   onComplete: () => {},
   onSkip: () => {},
-  spotlightColor: '#0052FF',
+  spotlightColor: '#3B7BDF',
   spotlightOpacity: 0.85,
+  onStepShown: () => {},
 };
 
 interface TourState {
@@ -36,6 +39,7 @@ export class TourEngine {
   private options: Required<TourOptions>;
   private state: TourState;
   private hostElement: HTMLElement | null = null;
+  private readonly onKeydown = (event: KeyboardEvent) => this.handleKeydown(event);
 
   constructor(options: TourOptions = {}) {
     this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -98,7 +102,7 @@ export class TourEngine {
       height: 100vh;
       background: rgba(0, 0, 0, ${this.options.spotlightOpacity});
       pointer-events: none;
-      z-index: 2147483350;
+      z-index: 2147483000;
       display: none;
     `;
     this.state.shadowRoot.appendChild(this.state.overlayElement);
@@ -111,7 +115,7 @@ export class TourEngine {
       border-radius: 8px;
       box-shadow: 0 0 0 9999px rgba(0, 0, 0, ${this.options.spotlightOpacity});
       pointer-events: none;
-      z-index: 2147483360;
+      z-index: 2147483001;
       display: none;
       transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
       border: 3px solid ${this.options.spotlightColor};
@@ -125,15 +129,16 @@ export class TourEngine {
       position: fixed;
       max-width: 320px;
       padding: 16px 20px;
-      background: white;
+      background: #111828;
+      color: #F8FAFC;
+      border: 1px dashed rgba(59, 123, 223, 0.6);
       border-radius: 12px;
       box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
-      z-index: 2147483370;
+      z-index: 2147483250;
       display: none;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
       font-size: 14px;
       line-height: 1.5;
-      color: #1a1a2e;
       pointer-events: auto;
     `;
     this.state.shadowRoot.appendChild(this.state.tooltipElement);
@@ -146,41 +151,22 @@ export class TourEngine {
       gap: 8px;
       margin-top: 16px;
       padding-top: 16px;
-      border-top: 1px solid #e5e7eb;
+      border-top: 1px dashed rgba(59, 123, 223, 0.35);
     `;
-    controls.innerHTML = `
-      <button id="ghost-tour-prev" style="
-        padding: 8px 16px;
-        background: #f3f4f6;
-        color: #374151;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-      ">Previous</button>
-      <button id="ghost-tour-next" style="
-        padding: 8px 16px;
-        background: #0052FF;
-        color: white;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-      ">Next</button>
-      <button id="ghost-tour-skip" style="
-        padding: 8px 16px;
-        background: transparent;
-        color: #6b7280;
-        border: none;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-        margin-left: auto;
-      ">Skip Tour</button>
-    `;
+    const base = 'padding:8px 14px;border:none;border-radius:8px;cursor:pointer;font:600 13px/1 Inter,-apple-system,"Segoe UI",Roboto,sans-serif;';
+    const makeButton = (id: string, text: string, css: string) => {
+      const button = document.createElement('button');
+      button.id = id;
+      button.type = 'button';
+      button.textContent = text;
+      button.style.cssText = base + css;
+      return button;
+    };
+    controls.append(
+      makeButton('ghost-tour-prev', 'Previous', 'background:#1A2336;color:#F8FAFC;'),
+      makeButton('ghost-tour-next', 'Next', 'background:#3B7BDF;color:#fff;'),
+      makeButton('ghost-tour-skip', 'Skip Tour', 'background:transparent;color:#94A3B8;margin-left:auto;'),
+    );
     this.state.tooltipElement.appendChild(controls);
 
     // Attach event listeners
@@ -189,7 +175,7 @@ export class TourEngine {
     this.state.shadowRoot.getElementById('ghost-tour-skip')!.addEventListener('click', () => this.skipTour());
 
     // Keyboard navigation
-    document.addEventListener('keydown', this.handleKeydown.bind(this));
+    document.addEventListener('keydown', this.onKeydown);
   }
 
   private injectStyles(): void {
@@ -206,8 +192,8 @@ export class TourEngine {
         animation: ghost-tour-pulse 2s ease-in-out infinite;
       }
       @keyframes ghost-tour-pulse {
-        0%, 100% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.85), 0 0 20px rgba(0, 82, 255, 0.5); }
-        50% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.85), 0 0 30px rgba(0, 82, 255, 0.8); }
+        0%, 100% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.85), 0 0 20px rgba(59, 123, 223, 0.5); }
+        50% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.85), 0 0 30px rgba(59, 123, 223, 0.8); }
       }
       #ghost-tour-overlay {
         animation: ghost-tour-fade-in 0.3s ease-out;
@@ -222,6 +208,9 @@ export class TourEngine {
 
   private handleKeydown(event: KeyboardEvent): void {
     if (!this.state.isActive) return;
+
+    const origin = event.composedPath()[0];
+    if (origin instanceof HTMLElement && (origin.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(origin.tagName))) return;
 
     switch (event.key) {
       case 'ArrowRight':
@@ -287,6 +276,9 @@ export class TourEngine {
       this.state.spotlightElement.style.height = `${rect.height + 16}px`;
     }
 
+    await this.options.onStepShown(index, targetElement, step);
+    if (!this.state.isActive) return;
+
     // Position tooltip
     this.positionTooltip(rect, step.message);
 
@@ -301,12 +293,16 @@ export class TourEngine {
    * Find target element using the Element Targeting Cascade
    */
   private findTargetElement(targetId: string): HTMLElement | null {
+    const esc = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+      ? CSS.escape(targetId)
+      : targetId.replace(/["\\]/g, '\\$&');
+
     // Try data-ghost-id first
-    let element = document.querySelector<HTMLElement>(`[data-ghost-id="${CSS.escape(targetId)}"]`);
+    let element = document.querySelector<HTMLElement>(`[data-ghost-id="${esc}"]`);
     if (element) return element;
 
     // Try data-testid
-    element = document.querySelector<HTMLElement>(`[data-testid="${CSS.escape(targetId)}"]`);
+    element = document.querySelector<HTMLElement>(`[data-testid="${esc}"]`);
     if (element) return element;
 
     // Try id
@@ -314,7 +310,7 @@ export class TourEngine {
     if (element) return element;
 
     // Try aria-label
-    element = document.querySelector<HTMLElement>(`[aria-label="${CSS.escape(targetId)}"]`);
+    element = document.querySelector<HTMLElement>(`[aria-label="${esc}"]`);
     if (element) return element;
 
     // Try registered target
@@ -331,6 +327,17 @@ export class TourEngine {
         }
       }
     } catch {}
+
+    // Read-only fallback (tours never change the page): exact visible text or aria-label.
+    const wanted = targetId.replace(/[_-]+/g, ' ').trim().toLowerCase();
+    if (wanted.length >= 3 && wanted.length <= 60) {
+      const candidates = document.querySelectorAll<HTMLElement>('a, button, [role="button"], [role="tab"], h1, h2, h3, label');
+      for (const el of Array.from(candidates)) {
+        if (el.closest('[data-sensitive], [data-pii], #ghost-cursor-widget-container')) continue;
+        const text = (el.getAttribute('aria-label') || el.textContent || '').replace(/\s+/g, ' ').trim().toLowerCase();
+        if (text === wanted) return el;
+      }
+    }
 
     return null;
   }
@@ -371,7 +378,7 @@ export class TourEngine {
     messageEl.className = 'tour-message';
     messageEl.style.marginBottom = '8px';
     const counter = document.createElement('div');
-    counter.style.cssText = 'font-size: 12px; color: #0052FF; font-weight: 600; margin-bottom: 4px;';
+    counter.style.cssText = 'font-size: 12px; color: #3B7BDF; font-weight: 600; margin-bottom: 4px;';
     counter.textContent = `Step ${stepNumber} of ${totalSteps}`;
     const body = document.createElement('div');
     body.textContent = message;
@@ -400,9 +407,9 @@ export class TourEngine {
       const isLast = index === this.state.steps.length - 1;
       nextBtn.textContent = isLast ? 'Finish' : 'Next';
       if (isLast) {
-        nextBtn.style.background = '#10b981';
+        nextBtn.style.background = '#22C55E';
       } else {
-        nextBtn.style.background = '#0052FF';
+        nextBtn.style.background = '#3B7BDF';
       }
     }
   }
@@ -454,7 +461,7 @@ export class TourEngine {
     this.state.isActive = false;
 
     // Remove event listeners
-    document.removeEventListener('keydown', this.handleKeydown.bind(this));
+    document.removeEventListener('keydown', this.onKeydown);
 
     // Remove shadow DOM
     if (this.state.shadowRoot) {

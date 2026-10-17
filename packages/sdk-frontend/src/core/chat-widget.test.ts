@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { h, render } from 'preact';
 import { ChatWidget, type ChatWidgetProps } from './chat/ChatWidget';
+import { createBridge, type Bridge, INITIAL_WIDGET_STATE, type WidgetBridgeState } from './bridge';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -8,7 +9,7 @@ if (!Element.prototype.scrollIntoView) {
   Element.prototype.scrollIntoView = () => {};
 }
 
-function mount(props?: Partial<ChatWidgetProps>) {
+function mount(props?: Partial<ChatWidgetProps>, bridge?: Bridge<WidgetBridgeState>) {
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = host.attachShadow({ mode: 'open' });
@@ -19,6 +20,7 @@ function mount(props?: Partial<ChatWidgetProps>) {
     initialContext: { page: 'home', values: {}, availableTargets: [] },
     onSendMessage: async () => ({ reply: 'ok', status: 'completed', runId: 'r', revision: 0 }),
     onActionApproval: async () => null,
+    ...(bridge ? { bridge } : {}),
     ...props,
   }), root);
   return { host, root };
@@ -83,6 +85,26 @@ describe('ChatWidget shell', () => {
     expect(plan.textContent).toContain('Cancel');
     expect(plan.textContent).toContain('Approve and Run');
     expect(plan.textContent).not.toContain('theme.toggle');
+  });
+
+  it('updates header dock state and status info from bridge', async () => {
+    const bridge = createBridge({ ...INITIAL_WIDGET_STATE });
+    const { root } = mount({}, bridge);
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    bridge.set({ step: { index: 2, total: 3 } });
+    await tick();
+    expect(root.querySelector('.gc-status')!.textContent).toBe('Step 2/3');
+
+    bridge.set({ step: null, outcome: 'error' });
+    await tick();
+    expect(root.querySelector('#gc-dock')!.getAttribute('data-outcome')).toBe('error');
+    expect(root.querySelector('.gc-status')!.textContent).toBe('Needs help');
+
+    bridge.set({ cursorAway: true });
+    await tick();
+    expect(root.querySelector('#gc-dock')!.getAttribute('data-state')).toBe('away');
   });
 });
 

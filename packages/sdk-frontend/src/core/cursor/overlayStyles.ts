@@ -15,6 +15,10 @@ export const OVERLAY_CSS = `
 .gc-ghost-text::after { content: ""; width: 2px; height: 1.1em; margin-left: 1px; background: var(--gc-accent); animation: gc-caret .8s steps(1) infinite; }
 @keyframes gc-caret { 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .gc-ripple, .gc-ghost-text::after { animation: none; } }
+.gc-main::after { content: ""; position: absolute; left: -11px; top: -11px; width: 24px; height: 24px; border-radius: 50%; border: 2px dashed var(--gc-accent); opacity: 0; }
+.gc-main[data-waiting="1"]::after { animation: gc-orbit .9s linear .15s infinite; }
+@keyframes gc-orbit { from { opacity: 1; transform: rotate(0deg); } to { opacity: 1; transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .gc-main[data-waiting="1"]::after { animation: none; opacity: 1; } }
 `;
 
 export const RING_Z = 2147483100;

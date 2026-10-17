@@ -145,5 +145,31 @@ describe('acting animations', () => {
     expect(c.state).toBe('acting');
     c.dispose();
   });
+
+  it('dock("error") calls onDocked with "error" and ends in state docked', async () => {
+    const onDocked = vi.fn();
+    const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true, onDocked });
+    await c.undock();
+    await c.dock('error');
+    expect(onDocked).toHaveBeenCalledWith('error');
+    expect(c.state).toBe('docked');
+    c.dispose();
+  });
+
+  it('wait(true) sets data-waiting="1" and state waiting; wait(false) restores aiming', async () => {
+    const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true });
+    await c.undock();
+    const overlay = document.getElementById('ghost-cursor-overlay')!;
+    const cursor = overlay.shadowRoot!.querySelector('.gc-main') as HTMLElement;
+
+    c.wait(true);
+    expect(cursor.getAttribute('data-waiting')).toBe('1');
+    expect(c.state).toBe('waiting');
+
+    c.wait(false);
+    expect(cursor.hasAttribute('data-waiting')).toBe(false);
+    expect(c.state).toBe('aiming');
+    c.dispose();
+  });
 });
 

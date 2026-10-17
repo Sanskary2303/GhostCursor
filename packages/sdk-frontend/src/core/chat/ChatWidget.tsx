@@ -179,6 +179,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     e.preventDefault();
     const { inputValue, isLoading, isExecutingActions } = this.state;
     if (!inputValue.trim() || isLoading || isExecutingActions) return;
+    this.props.bridge?.set({ outcome: 'none' });
 
     this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
@@ -272,6 +273,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
   private handleOptionSelect = async (option: string) => {
     if (!option || this.state.isLoading || this.state.isExecutingActions) return;
+    this.props.bridge?.set({ outcome: 'none' });
     this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
     // Send selected option as user response
@@ -328,9 +330,13 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     return 'none';
   }
 
-  private statusInfo(): { state: 'online' | 'thinking' | 'working'; text: string } {
-    if (this.state.isExecutingActions) return { state: 'working', text: 'Working…' };
-    if (this.state.isLoading) return { state: 'thinking', text: 'Thinking…' };
+  private statusInfo(): { state: 'online' | 'thinking' | 'working' | 'error'; text: string } {
+    const { ui, isExecutingActions, isLoading } = this.state;
+    if (ui.step) return { state: 'working', text: `Step ${ui.step.index}/${ui.step.total}` };
+    if (isExecutingActions) return { state: 'working', text: 'Working…' };
+    if (isLoading) return { state: 'thinking', text: 'Thinking…' };
+    if (ui.outcome === 'error') return { state: 'error', text: 'Needs help' };
+    if (ui.outcome === 'success') return { state: 'online', text: 'Done ✓' };
     return { state: 'online', text: 'Online' };
   }
 
@@ -368,6 +374,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                 className="gc-dock"
                 data-state={this.dockState()}
                 data-idle={this.idleState()}
+                data-outcome={this.state.ui.outcome}
               >
                 <BrandCursor width={22} accent={this.tokens.accent} className="gc-dock-cursor" />
                 <span className="gc-dock-ghost" aria-hidden="true" />
@@ -478,6 +485,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             id="gc-launcher"
             className="gc-launcher"
             data-state={this.dockState()}
+            data-outcome={this.state.ui.outcome}
             onClick={this.toggleChat}
             aria-label="Open Ghost Cursor chat"
           >

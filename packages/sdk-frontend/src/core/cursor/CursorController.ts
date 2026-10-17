@@ -18,6 +18,7 @@ export interface CursorControllerOptions {
   /** #RRGGBB accent for the echo and trails. Anything else falls back to the brand blue. */
   accent?: string;
   onStateChange?: (state: CursorState) => void;
+  onDocked?: (outcome: CursorOutcome) => void;
   /** Test hook. Defaults to the prefers-reduced-motion media query. */
   reducedMotion?: () => boolean;
 }
@@ -106,10 +107,34 @@ export class CursorController {
   async dock(outcome: CursorOutcome = 'success'): Promise<void> {
     const cursor = this.cursorEl;
     if (!cursor || this.current === 'docked' || this.disposed) return;
+    this.wait(false);
+    this.setCaption(null);
+    if (outcome === 'error') await this.shake();
     this.host?.setAttribute('data-gc-outcome', outcome);
     const finished = await this.travel(this.dockPoint(), 'returning', true, 0.5, 0, outcome === 'stopped' ? 250 : undefined);
     if (!finished) cursor.style.opacity = '0';
     this.setState('docked');
+    this.opts.onDocked?.(outcome);
+  }
+
+  /** Show or hide the "waiting" orbit (navigation, element not ready yet). */
+  wait(on: boolean): void {
+    const cursor = this.cursorEl;
+    if (!cursor) return;
+    if (on) {
+      cursor.setAttribute('data-waiting', '1');
+      if (this.current === 'aiming' || this.current === 'acting') this.setState('waiting');
+    } else {
+      cursor.removeAttribute('data-waiting');
+      if (this.current === 'waiting') this.setState('aiming');
+    }
+  }
+
+  private async shake(): Promise<void> {
+    const cursor = this.cursorEl;
+    if (!cursor || this.reduced()) return;
+    const p = this.pos;
+    await this.play(cursor, [0, -6, 6, -4, 4, 0].map(dx => ({ transform: poseTransform({ x: p.x + dx, y: p.y }) })), 300, 'ease-in-out');
   }
 
   /** Ring around the element that follows it every frame until removed. */

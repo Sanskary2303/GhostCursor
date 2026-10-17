@@ -136,6 +136,13 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       ring.setTone(result.ok ? 'success' : 'error');
       setTimeout(() => ring.remove(), result.ok ? 350 : 900);
     },
+    onStepStart: (info) => {
+      widgetBridge.set({
+        step: { index: info.index + 1, total: info.total },
+        status: `${info.index + 1}/${info.total} • ${describeAction(info.action)}`,
+      });
+    },
+    onWait: (waiting) => cursor.wait(waiting),
   });
 
   const tourEngine = new TourEngine({
@@ -177,6 +184,14 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     onStateChange: (state) => {
       const away = state !== 'docked';
       if (widgetBridge.get().cursorAway !== away) widgetBridge.set({ cursorAway: away });
+    },
+    onDocked: (outcome) => {
+      widgetBridge.set({ outcome, step: null, status: '' });
+      if (outcome !== 'error') {
+        setTimeout(() => {
+          if (widgetBridge.get().outcome === outcome) widgetBridge.set({ outcome: 'none' });
+        }, 2500);
+      }
     },
   });
 

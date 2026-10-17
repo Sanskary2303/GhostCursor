@@ -70,6 +70,11 @@ export const WIDGET_CSS = `
 .gc-btn--ghost:hover { border-color: var(--gc-muted); }
 .gc-btn--primary { background: var(--gc-accent); color: #fff; border: 0; box-shadow: 0 6px 16px var(--gc-accent-soft); }
 .gc-btn:focus-visible, .gc-option:focus-visible, .gc-send:focus-visible, .gc-stop:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 2px; }
+.gc-dock[data-outcome="success"]::after, .gc-launcher[data-outcome="success"] .gc-launcher-ring { border-style: solid; border-color: var(--gc-success); animation: gc-flash 1.2s ease-out 1; }
+.gc-dock[data-outcome="error"]::before, .gc-launcher[data-outcome="error"]::after { content: ""; position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--gc-danger); border: 2px solid var(--gc-surface); z-index: 1; }
+.gc-dock[data-outcome="success"] .gc-dock-cursor, .gc-dock[data-outcome="error"] .gc-dock-cursor, .gc-dock[data-outcome="stopped"] .gc-dock-cursor { animation: gc-land .45s cubic-bezier(.34, 1.56, .64, 1) 1; }
+@keyframes gc-land { 0% { transform: translate(2px, 1px) scale(1.15); } 60% { transform: translate(2px, 1px) scale(.8); } 100% { transform: translate(2px, 1px) scale(1); } }
+@keyframes gc-flash { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, .6); } 100% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); } }
 @keyframes gc-spin { to { transform: rotate(360deg); } }
 @keyframes gc-float { 0%, 100% { transform: translate(2px, 1px); } 50% { transform: translate(2px, -1px); } }
 @keyframes gc-march { to { stroke-dashoffset: -30; } }

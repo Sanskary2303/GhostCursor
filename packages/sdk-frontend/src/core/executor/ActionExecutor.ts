@@ -27,8 +27,12 @@ export interface ExecutionOptions {
   onAim?: (element: HTMLElement, info: StepInfo) => Promise<void> | void;
   /** Called and awaited right before the DOM is changed (press / typing animations). */
   onBeforeAct?: (element: HTMLElement, info: StepInfo) => Promise<void> | void;
-  /** Called after every step with its result. Not awaited. */
+  /** Called after each step completes (success or failure). */
   onStepEnd?: (info: StepInfo, result: ToolResult) => void;
+  /** Called before each step starts. */
+  onStepStart?: (info: StepInfo) => void;
+  /** Called with true while waiting for an element or a route change, then false. */
+  onWait?: (waiting: boolean, info: StepInfo) => void;
   allowSemanticLookup?: boolean;
 }
 
@@ -46,6 +50,8 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   onAim: () => {},
   onBeforeAct: () => {},
   onStepEnd: () => {},
+  onStepStart: () => {},
+  onWait: () => {},
   allowSemanticLookup: false,
 };
 
@@ -194,7 +200,13 @@ async function executeNavigate(targetPage: string, options: Required<ExecutionOp
     window.dispatchEvent(new PopStateEvent('popstate'));
   }
 
-  const reached = await waitForNavigation(path);
+  options.onWait(true, info);
+  let reached = false;
+  try {
+    reached = await waitForNavigation(path);
+  } finally {
+    options.onWait(false, info);
+  }
   if (!reached) {
     return { id: crypto.randomUUID(), ok: false, error: `navigation did not reach ${path}` };
   }
@@ -209,10 +221,16 @@ async function executeNavigate(targetPage: string, options: Required<ExecutionOp
 async function executeClick(targetId: string, options: Required<ExecutionOptions>, info: StepInfo): Promise<ToolResult> {
   options.onProgress(`click:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, {
-    timeout: options.timeout,
-    allowSemanticLookup: options.allowSemanticLookup,
-  });
+  options.onWait(true, info);
+  let resolution: Awaited<ReturnType<typeof resolveTargetWithCascade>>;
+  try {
+    resolution = await resolveTargetWithCascade(targetId, {
+      timeout: options.timeout,
+      allowSemanticLookup: options.allowSemanticLookup,
+    });
+  } finally {
+    options.onWait(false, info);
+  }
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
@@ -245,10 +263,16 @@ async function executeFillInput(
 ): Promise<ToolResult> {
   options.onProgress(`fill:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, {
-    timeout: options.timeout,
-    allowSemanticLookup: options.allowSemanticLookup,
-  });
+  options.onWait(true, info);
+  let resolution: Awaited<ReturnType<typeof resolveTargetWithCascade>>;
+  try {
+    resolution = await resolveTargetWithCascade(targetId, {
+      timeout: options.timeout,
+      allowSemanticLookup: options.allowSemanticLookup,
+    });
+  } finally {
+    options.onWait(false, info);
+  }
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
@@ -293,10 +317,16 @@ async function executeSelectOption(
 ): Promise<ToolResult> {
   options.onProgress(`select:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, {
-    timeout: options.timeout,
-    allowSemanticLookup: options.allowSemanticLookup,
-  });
+  options.onWait(true, info);
+  let resolution: Awaited<ReturnType<typeof resolveTargetWithCascade>>;
+  try {
+    resolution = await resolveTargetWithCascade(targetId, {
+      timeout: options.timeout,
+      allowSemanticLookup: options.allowSemanticLookup,
+    });
+  } finally {
+    options.onWait(false, info);
+  }
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
@@ -338,10 +368,16 @@ async function executeToggleSwitch(
 ): Promise<ToolResult> {
   options.onProgress(`toggle:${targetId}`, 'executing');
 
-  const resolution = await resolveTargetWithCascade(targetId, {
-    timeout: options.timeout,
-    allowSemanticLookup: options.allowSemanticLookup,
-  });
+  options.onWait(true, info);
+  let resolution: Awaited<ReturnType<typeof resolveTargetWithCascade>>;
+  try {
+    resolution = await resolveTargetWithCascade(targetId, {
+      timeout: options.timeout,
+      allowSemanticLookup: options.allowSemanticLookup,
+    });
+  } finally {
+    options.onWait(false, info);
+  }
   if (!resolution.element) {
     return { id: crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
   }
@@ -480,6 +516,7 @@ export class ActionExecutor {
         return { success: false, results, error: 'cancelled' };
       }
       const info: StepInfo = { action: actions[i], index: i, total: actions.length, signal: this.abortController.signal };
+      this.options.onStepStart(info);
       const result = await executeAction(actions[i], this.options, info);
       result.id = actions[i].id ?? result.id;
       results.push(result);

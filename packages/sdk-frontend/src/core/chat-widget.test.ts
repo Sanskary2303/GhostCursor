@@ -106,5 +106,28 @@ describe('ChatWidget shell', () => {
     await tick();
     expect(root.querySelector('#gc-dock')!.getAttribute('data-state')).toBe('away');
   });
+
+  it('collapses into the mission bar while cursor is away and restores full panel when back', async () => {
+    const bridge = createBridge({ ...INITIAL_WIDGET_STATE });
+    const { root } = mount({}, bridge);
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    expect(root.querySelector('[role="log"]')).not.toBeNull();
+    expect(root.querySelector('.ghost-chat-panel.gc-mission')).toBeNull();
+
+    bridge.set({ cursorAway: true, status: '2/3 • Click Add to Cart' });
+    await tick();
+
+    expect(root.querySelector('.ghost-chat-panel.gc-mission')).not.toBeNull();
+    expect(root.querySelector('[role="log"]')).toBeNull();
+    expect(root.querySelector('.gc-mission-status')!.textContent).toBe('2/3 • Click Add to Cart');
+
+    bridge.set({ cursorAway: false });
+    await tick();
+
+    expect(root.querySelector('.ghost-chat-panel.gc-mission')).toBeNull();
+    expect(root.querySelector('[role="log"]')).not.toBeNull();
+  });
 });
 

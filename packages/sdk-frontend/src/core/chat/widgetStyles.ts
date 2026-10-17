@@ -75,6 +75,14 @@ export const WIDGET_CSS = `
 .gc-dock[data-outcome="success"] .gc-dock-cursor, .gc-dock[data-outcome="error"] .gc-dock-cursor, .gc-dock[data-outcome="stopped"] .gc-dock-cursor { animation: gc-land .45s cubic-bezier(.34, 1.56, .64, 1) 1; }
 @keyframes gc-land { 0% { transform: translate(2px, 1px) scale(1.15); } 60% { transform: translate(2px, 1px) scale(.8); } 100% { transform: translate(2px, 1px) scale(1); } }
 @keyframes gc-flash { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, .6); } 100% { box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); } }
+.gc-panel.gc-mission { width: 360px; height: auto; border-radius: 16px; }
+.gc-mission-row { display: flex; align-items: center; gap: 12px; padding: 12px 12px 12px 14px; }
+.gc-mission-text { flex: 1; min-width: 0; }
+.gc-mission-label { font-size: 10px; font-weight: 800; letter-spacing: .16em; color: var(--gc-accent); }
+.gc-mission-status { margin: 2px 0 6px; font-size: 13px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.gc-mission-progress { height: 4px; border-radius: 2px; background: var(--gc-surface-2); overflow: hidden; }
+.gc-mission-progress span { display: block; height: 100%; background: var(--gc-accent); transition: width .3s ease; }
+.gc-mission .gc-stop { height: 36px; padding: 0 12px; }
 @keyframes gc-spin { to { transform: rotate(360deg); } }
 @keyframes gc-float { 0%, 100% { transform: translate(2px, 1px); } 50% { transform: translate(2px, -1px); } }
 @keyframes gc-march { to { stroke-dashoffset: -30; } }

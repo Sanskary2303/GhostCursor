@@ -19,14 +19,22 @@ async function sampleCursor(page: Page) {
       const cur = host?.shadowRoot?.querySelector('.gc-main') as HTMLElement | null;
       if (host && cur) {
         const cs = getComputedStyle(cur);
-        w.__gcSamples.push({ state: host.getAttribute('data-gc-cursor-state'), transform: cs.transform, opacity: cs.opacity });
+        let hit: string | null = null;
+        const m = /matrix\(([^)]+)\)/.exec(cs.transform);
+        if (m) {
+          const n = m[1].split(',').map(Number);
+          const under = document.elementFromPoint(n[4] + 1.34, n[5] + 1.34);
+          hit = under?.closest('[data-ghost-id]')?.getAttribute('data-ghost-id')
+            ?? (under?.closest('#ghost-cursor-widget-container') ? 'WIDGET' : null);
+        }
+        w.__gcSamples.push({ state: host.getAttribute('data-gc-cursor-state'), transform: cs.transform, opacity: cs.opacity, hit });
       }
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   });
 }
-type CursorSample = { state: string; transform: string; opacity: string };
+type CursorSample = { state: string; transform: string; opacity: string; hit: string | null };
 const cursorSamples = (page: Page): Promise<CursorSample[]> => page.evaluate(() => (window as any).__gcSamples);
 
 test.beforeEach(async ({ page }) => {
@@ -411,6 +419,67 @@ test('cursor flies out of the dock along a curve and docks again', async ({ page
   expect(samples.some(s => s.state === 'returning')).toBe(true);
   expect(samples[samples.length - 1].opacity).toBe('0');
   await expect(page.locator('#ghost-cursor-canvas')).toHaveCount(0);
+});
+
+test('mission bar keeps the target visible while the cursor acts', async ({ page }) => {
+  await page.goto('/');
+  await sampleCursor(page);
+  await ask(page, 'Turn on dark mode');
+  await approve(page);
+  await expect(page.locator('.ghost-chat-panel.gc-mission')).toBeVisible({ timeout: 10_000 });
+  await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+  await expect(page.locator('.ghost-chat-panel.gc-mission')).toHaveCount(0, { timeout: 10_000 });
+  await expect(chat(page)).toContainText('Theme switched to Dark Mode', { timeout: 20_000 });
+
+  const acting = (await cursorSamples(page)).filter(s => s.state === 'acting');
+  expect(acting.length).toBeGreaterThan(0);
+  expect(acting.some(s => s.hit === 'theme.toggle')).toBe(true);
+  expect(acting.some(s => s.hit === 'WIDGET')).toBe(false);
+});
+
+test('Stop during a flight sends the cursor home within 400 ms, and the next plan still runs', async ({ page }) => {
+  await page.goto('/');
+  await ask(page, 'Add the Air Max 90 in size 10 to my cart');
+  await approve(page);
+  await expect(page.locator('#ghost-cursor-overlay')).toHaveAttribute('data-gc-cursor-state', 'flying', { timeout: 15_000 });
+  await page.evaluate(() => {
+    const w = window as any;
+    const widgetRoot = document.getElementById('ghost-cursor-widget-container')!.shadowRoot!;
+    widgetRoot.addEventListener('click', (e) => {
+      const t = e.target as Element;
+      if (t.closest && t.closest('[aria-label="Stop"]')) w.__stopAt = performance.now();
+    }, true);
+    const host = document.getElementById('ghost-cursor-overlay')!;
+    new MutationObserver(() => {
+      const s = host.getAttribute('data-gc-cursor-state');
+      if (w.__stopAt && !w.__homeAt && (s === 'returning' || s === 'docked')) w.__homeAt = performance.now();
+    }).observe(host, { attributes: true, attributeFilter: ['data-gc-cursor-state'] });
+  });
+  await page.getByRole('button', { name: 'Stop' }).click();
+  await page.waitForFunction(() => (window as any).__homeAt, null, { timeout: 5_000 });
+  const elapsed = await page.evaluate(() => (window as any).__homeAt - (window as any).__stopAt);
+  expect(elapsed).toBeLessThan(400);
+  await expect(chat(page)).toContainText('Stopped. Steps already done were kept.', { timeout: 10_000 });
+
+  await ask(page, 'Turn on dark mode');
+  await approve(page);
+  await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+});
+
+test.describe('reduced motion', () => {
+  test.use({ reducedMotion: 'reduce' as any, contextOptions: { reducedMotion: 'reduce' } });
+
+  test('the cursor fades between targets instead of flying', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    await sampleCursor(page);
+    await ask(page, 'Turn on dark mode');
+    await approve(page);
+    await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+    await expect(page.locator('#ghost-cursor-overlay')).toHaveAttribute('data-gc-cursor-state', 'docked', { timeout: 10_000 });
+    const flying = new Set((await cursorSamples(page)).filter(s => s.state === 'flying').map(s => s.transform));
+    expect(flying.size).toBeLessThanOrEqual(3);
+  });
 });
 
 

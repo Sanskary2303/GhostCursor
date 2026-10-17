@@ -114,6 +114,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     allowSemanticLookup,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
     onAim: async (element, info) => {
+      await keepTargetVisible(element);
       activeRing?.remove();
       activeRing = null;
       await cursor.flyTo(element);
@@ -194,6 +195,36 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       }
     },
   });
+
+  const nextFrame = () => new Promise<void>((resolve) => {
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => resolve());
+    else setTimeout(resolve, 16);
+  });
+
+  function overlaps(a: DOMRect, b: DOMRect, pad = 12): boolean {
+    return a.left < b.right + pad && a.right > b.left - pad && a.top < b.bottom + pad && a.bottom > b.top - pad;
+  }
+
+  /** If the widget covers the target, move the widget to the other side first. */
+  async function keepTargetVisible(element: HTMLElement): Promise<void> {
+    const widget = shadowRoot.getElementById('ghost-cursor-widget');
+    if (!widget || !overlaps(element.getBoundingClientRect(), widget.getBoundingClientRect())) return;
+    widgetBridge.set({ flipSide: !widgetBridge.get().flipSide });
+    await nextFrame();
+    await nextFrame();
+  }
+
+  /** Clean up the step visuals, put the widget back, then fly home (not awaited by callers). */
+  async function finishRun(outcome: CursorOutcome): Promise<void> {
+    activeRing?.remove();
+    activeRing = null;
+    cursor.setCaption(null);
+    if (widgetBridge.get().flipSide) {
+      widgetBridge.set({ flipSide: false });
+      await nextFrame();
+    }
+    await cursor.dock(outcome);
+  }
 
   // State
   let isDisposed = false;
@@ -331,20 +362,18 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     return res;
   }
 
-  /** Undock, run the plan, then fly home while the results go to the server. */
   async function runWithCursor(actions: Action[]): Promise<ExecutionResult> {
+    await nextFrame(); // let the widget collapse into the mission bar first
     await cursor.undock();
     let execution: ExecutionResult;
     try {
       execution = await actionExecutor.execute(actions);
     } catch (error) {
-      cursor.setCaption(null);
-      void cursor.dock('error');
+      void finishRun('error');
       throw error;
     }
     const outcome: CursorOutcome = execution.success ? 'success' : execution.error === 'cancelled' ? 'stopped' : 'error';
-    cursor.setCaption(null);
-    void cursor.dock(outcome);
+    void finishRun(outcome);
     return execution;
   }
 

@@ -114,7 +114,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   };
 
   private handleKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape' && this.state.isOpen) {
+    if (e.key !== 'Escape') return;
+    if (this.state.isExecutingActions) {
+      this.handleStop();
+    } else if (this.state.isOpen) {
       this.setState({ isOpen: false });
     }
   };
@@ -340,6 +343,41 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     return { state: 'online', text: 'Online' };
   }
 
+  private renderDock() {
+    return (
+      <div
+        id="gc-dock"
+        className="gc-dock"
+        data-state={this.dockState()}
+        data-idle={this.idleState()}
+        data-outcome={this.state.ui.outcome}
+      >
+        <BrandCursor width={22} accent={this.tokens.accent} className="gc-dock-cursor" />
+        <span className="gc-dock-ghost" aria-hidden="true" />
+      </div>
+    );
+  }
+
+  private renderMissionBar() {
+    const { ui, isExecutingActions } = this.state;
+    const pct = ui.step ? Math.round((ui.step.index / ui.step.total) * 100) : 0;
+    return (
+      <div className="ghost-chat-panel gc-panel gc-mission" role="region" aria-label="Ghost Cursor is working">
+        <div className="gc-mission-row">
+          {this.renderDock()}
+          <div className="gc-mission-text">
+            <div className="gc-mission-label">{isExecutingActions ? 'WORKING' : 'RETURNING'}</div>
+            <div className="gc-mission-status" aria-live="polite">{ui.status || 'Getting ready…'}</div>
+            <div className="gc-mission-progress" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
+          </div>
+          {isExecutingActions && (
+            <button type="button" className="gc-stop" onClick={this.handleStop} aria-label="Stop">■ Stop</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   render() {
     const { isOpen, messages, inputValue, isLoading, isExecutingActions, unreadCount, showActionApproval, pendingActions, error } = this.state;
     const { theme, requireApprovalForActions } = this.props;
@@ -352,7 +390,18 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       'center': { top: '50%', left: '50%', transform: 'translate(-50%, -50%)' },
     };
 
-    const positionStyle = positions[theme.position] || positions['bottom-right'];
+    const flipped = {
+      'bottom-right': 'bottom-left',
+      'bottom-left': 'bottom-right',
+      'top-right': 'top-left',
+      'top-left': 'top-right',
+      center: 'center',
+    } as const;
+    const basePosition = theme.position || 'bottom-right';
+    const position = this.state.ui.flipSide ? flipped[basePosition] : basePosition;
+    const positionStyle = positions[position] || positions['bottom-right'];
+
+    const mission = isOpen && (isExecutingActions || this.state.ui.cursorAway);
 
     return (
       <div
@@ -366,31 +415,25 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       >
         <style>{this.css}</style>
         {isOpen ? (
-          <div className="ghost-chat-panel gc-panel">
-            {/* Header */}
-            <div className="gc-header">
-              <div
-                id="gc-dock"
-                className="gc-dock"
-                data-state={this.dockState()}
-                data-idle={this.idleState()}
-                data-outcome={this.state.ui.outcome}
-              >
-                <BrandCursor width={22} accent={this.tokens.accent} className="gc-dock-cursor" />
-                <span className="gc-dock-ghost" aria-hidden="true" />
+          mission ? (
+            this.renderMissionBar()
+          ) : (
+            <div className="ghost-chat-panel gc-panel">
+              {/* Header */}
+              <div className="gc-header">
+                {this.renderDock()}
+                <div className="gc-title">
+                  <div className="gc-wordmark">{BRAND.wordmark}</div>
+                  <div className="gc-tagline">{BRAND.tagline}</div>
+                </div>
+                <span className="gc-status" data-state={this.statusInfo().state}>{this.statusInfo().text}</span>
+                <button type="button" className="gc-icon-btn" onClick={this.toggleChat} aria-label="Close chat">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
               </div>
-              <div className="gc-title">
-                <div className="gc-wordmark">{BRAND.wordmark}</div>
-                <div className="gc-tagline">{BRAND.tagline}</div>
-              </div>
-              <span className="gc-status" data-state={this.statusInfo().state}>{this.statusInfo().text}</span>
-              <button type="button" className="gc-icon-btn" onClick={this.toggleChat} aria-label="Close chat">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
-              </button>
-            </div>
 
             {/* Messages */}
             <div
@@ -479,7 +522,8 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
               )}
             </form>
           </div>
-        ) : (
+        )
+      ) : (
           <button
             type="button"
             id="gc-launcher"

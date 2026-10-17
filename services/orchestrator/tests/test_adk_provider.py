@@ -18,20 +18,26 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 from google.adk.sessions import InMemorySessionService
 
+import time
+from pydantic import Field
+
 from services.orchestrator.app.agent import create_ghost_agent, create_adk_agent
 from services.orchestrator.app.llm.adk import ADKProvider, DynamicLongRunningTool, build_adk_tools
+from services.orchestrator.app.llm.vertex import ProviderError
 from services.orchestrator.app.models.contracts import validate_actions
 
 
 class MockLlm(BaseLlm):
     """Offline mock LLM for testing ADK provider flows."""
     model: str = "mock-gemini-2.0-flash"
-    responses: List[types.Content] = []
+    responses: List[types.Content] = Field(default_factory=list)
+    requests: List[LlmRequest] = Field(default_factory=list)
     turn: int = 0
 
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
+        self.requests.append(llm_request)
         if self.turn < len(self.responses):
             content = self.responses[self.turn]
             self.turn += 1
@@ -193,6 +199,14 @@ async def test_adk_continuation_turn_resumes_model(session_service):
     assert "function_response" in transcript[2]["parts"][0]
     assert transcript[3]["role"] == "model"
     assert transcript[3]["parts"][0]["text"] == "Successfully navigated to settings."
+
+    # Verify session cleanup after terminal status
+    session_after = await session_service.get_session(
+        app_name="ghost_cursor", user_id="user_1", session_id=run_id
+    )
+    assert session_after is None
+    assert len(provider._runners) == 0
+    assert len(provider._started) == 0
 
 
 @pytest.mark.asyncio
@@ -438,13 +452,184 @@ def test_create_adk_agent_factory():
         }],
     )
 
-    assert agent.name == "ghost_cursor_orchestrator"
-    assert "Test brain knowledge." in agent.instruction
+    instruction_text = agent.instruction(None) if callable(agent.instruction) else agent.instruction
+    assert "Test brain knowledge." in instruction_text
     tool_names = [t.name for t in agent.tools]
     assert "navigate" in tool_names
     assert "click" in tool_names
     assert "toggle_switch" in tool_names
     assert "check_inventory" in tool_names
+
+
+@pytest.mark.asyncio
+async def test_adk_braces_in_brain(session_service):
+    """
+    Brain containing '{order_id}' does not trigger ADK state placeholder KeyError;
+    system instruction contains '{order_id}' literally.
+    """
+    mock_llm = MockLlm(responses=[
+        types.Content(role="model", parts=[types.Part(text="Understood rules.")])
+    ])
+    provider = ADKProvider(
+        project="test-project",
+        session_service=session_service,
+        llm_client=mock_llm,
+    )
+    agent = create_ghost_agent(
+        brain_content="Ask for {order_id} first.",
+        available_targets=[],
+        current_context={"page": "orders", "values": {}},
+    )
+    run_id = str(uuid.uuid4())
+    run_context = {"run_id": run_id, "subject": "user_1", "revision": 0}
+    transcript = [{"role": "user", "parts": [{"text": "Hello"}]}]
+
+    response = await provider.generate_content(
+        agent=agent,
+        user_message="Hello",
+        run_context=run_context,
+        transcript=transcript,
+    )
+
+    assert response.status == "completed"
+    assert len(mock_llm.requests) > 0
+    sys_instruction = mock_llm.requests[-1].config.system_instruction
+    assert "{order_id}" in sys_instruction
+
+
+@pytest.mark.asyncio
+async def test_adk_sweep_expired_sessions(session_service):
+    """
+    Expired ADK sessions older than SESSION_TTL_SECONDS are swept and forgotten.
+    """
+    turn1_content = types.Content(
+        role="model",
+        parts=[
+            types.Part(
+                function_call=types.FunctionCall(
+                    name="navigate",
+                    args={"target_page": "settings", "explanation": "Go to settings"},
+                )
+            )
+        ],
+    )
+    mock_llm = MockLlm(responses=[turn1_content, turn1_content])
+    provider = ADKProvider(
+        project="test-project",
+        session_service=session_service,
+        llm_client=mock_llm,
+    )
+    agent = create_ghost_agent(
+        brain_content="Navigation info.",
+        available_targets=[],
+        current_context={"page": "home", "values": {}},
+    )
+
+    # 1. Start a run that ends awaiting_actions
+    run_id1 = str(uuid.uuid4())
+    resp1 = await provider.generate_content(
+        agent=agent,
+        user_message="Go to settings",
+        run_context={"run_id": run_id1, "subject": "user_1", "revision": 0},
+        transcript=[{"role": "user", "parts": [{"text": "Go to settings"}]}],
+    )
+    assert resp1.status == "awaiting_actions"
+    assert run_id1 in provider._started
+
+    # 2. Age the first run past 1800s TTL
+    provider._started[run_id1] = (time.monotonic() - 1801, provider._started[run_id1][1])
+
+    # 3. Call generate_content for a different new run
+    run_id2 = str(uuid.uuid4())
+    resp2 = await provider.generate_content(
+        agent=agent,
+        user_message="Go to settings again",
+        run_context={"run_id": run_id2, "subject": "user_2", "revision": 0},
+        transcript=[{"role": "user", "parts": [{"text": "Go to settings again"}]}],
+    )
+    assert resp2.status == "awaiting_actions"
+
+    # 4. First run's session and runner are gone
+    session1 = await session_service.get_session(
+        app_name="ghost_cursor", user_id="user_1", session_id=run_id1
+    )
+    assert session1 is None
+    assert run_id1 not in provider._runners
+    assert run_id1 not in provider._started
+
+
+@pytest.mark.asyncio
+async def test_adk_lost_session_raises_provider_error(session_service):
+    """
+    A continuation turn reaching a provider without the session raises ProviderError('adk_session_missing').
+    """
+    mock_llm = MockLlm()
+    provider = ADKProvider(
+        project="test-project",
+        session_service=session_service,
+        llm_client=mock_llm,
+    )
+    agent = create_ghost_agent(
+        brain_content="",
+        available_targets=[],
+        current_context={"page": "home", "values": {}},
+    )
+    run_id = str(uuid.uuid4())
+    run_context = {"run_id": run_id, "kind": "actions", "revision": 1}
+    transcript = [
+        {"role": "user", "parts": [{"text": "Go"}]},
+        {"role": "model", "parts": [{"function_call": {"name": "navigate", "args": {}}}]},
+        {"role": "user", "parts": [{"function_response": {"name": "navigate", "response": {"ok": True}}}]},
+    ]
+
+    with pytest.raises(ProviderError, match="adk_session_missing"):
+        await provider.generate_content(
+            agent=agent,
+            user_message="",
+            run_context=run_context,
+            transcript=transcript,
+        )
+
+    assert mock_llm.turn == 0
+
+
+@pytest.mark.asyncio
+async def test_adk_summaries(session_service, monkeypatch):
+    """
+    With llm_client set, summarize returns heuristic.
+    With llm_client=None, summarize delegates to GeminiProvider.
+    """
+    mock_llm = MockLlm()
+    provider_mock = ADKProvider(
+        project="test-project",
+        session_service=session_service,
+        llm_client=mock_llm,
+    )
+    messages = [
+        {"role": "user", "text": "Can you help me switch to dark mode please?"},
+        {"role": "assistant", "text": "Sure, I will do that."},
+    ]
+    title, summary = await provider_mock.summarize(messages)
+    assert title == "Can you help me switch to"
+    assert "Can you help me switch to dark mode" in summary
+
+    class FakeGeminiProvider:
+        def __init__(self, **kw):
+            self.kw = kw
+
+        async def summarize(self, m):
+            return ("T", "S")
+
+    monkeypatch.setattr("services.orchestrator.app.llm.gemini.GeminiProvider", FakeGeminiProvider)
+
+    provider_real = ADKProvider(
+        project="test-project",
+        session_service=session_service,
+        llm_client=None,
+    )
+    title2, summary2 = await provider_real.summarize(messages)
+    assert title2 == "T"
+    assert summary2 == "S"
 
 
 @pytest.mark.skipif(not os.getenv("GHOST_ADK_LIVE"), reason="Live test requires GHOST_ADK_LIVE=1 and GCP credentials")

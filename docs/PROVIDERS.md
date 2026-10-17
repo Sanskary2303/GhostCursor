@@ -33,6 +33,11 @@ When `GHOST_PROVIDER=adk` is configured, Ghost Cursor automatically validates an
 - `GCP_LOCATION` $\to$ `GOOGLE_CLOUD_LOCATION`
 - Sets `GOOGLE_GENAI_USE_VERTEXAI=TRUE`
 
+### Limits
+- ADK keeps paused runs in the memory of the process that started them. Run the orchestrator as a single instance (Cloud Run `--max-instances=1`), or use `GHOST_PROVIDER=vertex` when you need several instances.
+- A continuation that reaches another instance fails with "The assistant is unavailable right now."
+- Paused runs are dropped after 30 minutes.
+
 ---
 
 ## 2. Vertex AI Gemini 2.0 (`vertex`)

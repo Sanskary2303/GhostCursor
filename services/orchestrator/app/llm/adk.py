@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -26,6 +27,8 @@ from .vertex import BaseVertexClient, ProviderError, heuristic_summary, parse_mo
 from .gemini import prune_transcript
 
 logger = logging.getLogger(__name__)
+
+SESSION_TTL_SECONDS = 1800
 
 
 class DynamicLongRunningTool(LongRunningFunctionTool):
@@ -115,16 +118,35 @@ class ADKProvider(BaseVertexClient):
         self.llm_client = llm_client
         self.app_name = app_name
         self._runners: Dict[str, Runner] = {}
+        self._started: Dict[str, Tuple[float, str]] = {}
+        self._summarizer: Optional[BaseVertexClient] = None
 
     def _build_agent(self, agent: GhostAgent) -> LlmAgent:
         adk_tools = build_adk_tools(agent.tools)
         model_target = self.llm_client if self.llm_client is not None else self.model
+        instruction_text = agent.instruction
         return LlmAgent(
             name=agent.name,
             model=model_target,
-            instruction=agent.instruction,
+            instruction=lambda _ctx: instruction_text,
             tools=adk_tools,
         )
+
+    async def _forget(self, run_id: str) -> None:
+        self._runners.pop(run_id, None)
+        started = self._started.pop(run_id, None)
+        user_id = started[1] if started else "default_user"
+        try:
+            await self.session_service.delete_session(
+                app_name=self.app_name, user_id=user_id, session_id=run_id
+            )
+        except Exception:
+            logger.warning("Could not delete ADK session for run %s", run_id)
+
+    async def _sweep_expired(self) -> None:
+        cutoff = time.monotonic() - SESSION_TTL_SECONDS
+        for run_id in [r for r, (t, _) in self._started.items() if t < cutoff]:
+            await self._forget(run_id)
 
     async def generate_content(
         self,
@@ -136,16 +158,22 @@ class ADKProvider(BaseVertexClient):
         run_id = str(run_context.get("run_id") or run_context.get("runId") or uuid.uuid4())
         user_id = str(run_context.get("subject") or "default_user")
 
+        await self._sweep_expired()
+
         # Check for existing session
         session = await self.session_service.get_session(
             app_name=self.app_name, user_id=user_id, session_id=run_id
         )
+
+        if session is None and run_context.get("kind"):
+            raise ProviderError("adk_session_missing")
 
         if session is None:
             # 1. New session: create in session service and construct runner
             session = await self.session_service.create_session(
                 app_name=self.app_name, user_id=user_id, session_id=run_id
             )
+            self._started[run_id] = (time.monotonic(), user_id)
             adk_agent = self._build_agent(agent)
             runner = Runner(
                 agent=adk_agent,
@@ -295,17 +323,24 @@ class ADKProvider(BaseVertexClient):
         wrapped_response = _ModelResponseWrapper([_ModelCandidate(model_event.content)])
         parsed = parse_model_response(wrapped_response, run_context)
 
-        # If run is finalized, clean up runner cache
+        # If run is finalized, clean up runner and session
         if parsed.status in ("completed", "failed", "cancelled"):
-            self._runners.pop(run_id, None)
+            await self._forget(run_id)
 
         return parsed
 
     async def summarize(self, messages: List[Dict[str, str]]) -> Tuple[str, str]:
-        """Summarize conversation messages using heuristic fallback."""
-        return heuristic_summary(messages)
+        if self.llm_client is not None:
+            return heuristic_summary(messages)
+        if self._summarizer is None:
+            from .gemini import GeminiProvider
+            self._summarizer = GeminiProvider(project=self.project, location=self.location, model=self.model)
+        return await self._summarizer.summarize(messages)
 
     async def close(self) -> None:
-        """Release cached runners."""
+        """Release cached runners and tracked sessions."""
         self._runners.clear()
+        self._started.clear()
+        if self._summarizer and hasattr(self._summarizer, "close"):
+            await self._summarizer.close()
 

@@ -154,12 +154,12 @@ def create_adk_agent(
         customer_backend_tools=customer_backend_tools,
     )
 
+    instruction_text = ghost_agent.instruction
     adk_tools = build_adk_tools(ghost_agent.tools)
-
     return LlmAgent(
         name=ghost_agent.name,
         model=model,
-        instruction=ghost_agent.instruction,
+        instruction=lambda _ctx: instruction_text,
         tools=adk_tools,
     )
 

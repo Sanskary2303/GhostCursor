@@ -133,6 +133,17 @@ describe('acting animations', () => {
     expect(caption.getAttribute('data-show')).toBe('1');
     expect(caption.textContent).toBe('2/3 • Click Add to Cart');
 
+    const parseX = (transform: string) => {
+      const match = /translate\(([^p]+)px/.exec(transform);
+      return match ? parseFloat(match[1]) : NaN;
+    };
+    expect(parseX(caption.style.transform)).toBeLessThan(c.position.x);
+
+    const btn = target(box(100, 200, 80, 40));
+    await c.flyTo(btn);
+    c.setCaption('x');
+    expect(parseX(caption.style.transform)).toBeGreaterThan(c.position.x);
+
     c.setCaption(null);
     expect(caption.getAttribute('data-show')).toBe('0');
     c.dispose();

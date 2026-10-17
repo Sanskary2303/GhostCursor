@@ -237,8 +237,10 @@ export class CursorController {
       return;
     }
     caption.textContent = text.length > 60 ? `${text.slice(0, 59)}…` : text;
-    const x = Math.min(this.pos.x + 22, window.innerWidth - 270);
-    const y = Math.min(this.pos.y + 18, window.innerHeight - 30);
+    const width = 260;
+    const right = this.pos.x + 44;
+    const x = right + width <= window.innerWidth - 8 ? right : Math.max(8, this.pos.x - width - 12);
+    const y = Math.min(Math.max(8, this.pos.y + 10), window.innerHeight - 30);
     caption.style.transform = `translate(${x}px, ${y}px)`;
     caption.setAttribute('data-show', '1');
   }

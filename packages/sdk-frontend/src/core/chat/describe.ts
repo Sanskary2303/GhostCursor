@@ -37,6 +37,10 @@ export function labelForTarget(targetId: string | undefined): string {
     if (el) {
       const aria = el.getAttribute('aria-label')?.trim();
       if (aria) return clip(aria);
+      if (el instanceof HTMLInputElement || el instanceof HTMLSelectElement || el instanceof HTMLTextAreaElement) {
+        const labelText = el.labels?.[0]?.textContent?.replace(/\s+/g, ' ').trim();
+        return labelText ? clip(labelText) : humanizeId(targetId);
+      }
       const text = (el.textContent || '').replace(/\s+/g, ' ').trim();
       if (text && text.length <= MAX_LABEL) return text;
     }

@@ -33,5 +33,24 @@ describe('describeAction', () => {
   it('never queries the DOM with an unsafe id', () => {
     expect(labelForTarget('x"],body,[a="')).toBe('x"],body,[a="');
   });
+
+  it('uses associated label for select inputs instead of option text', () => {
+    const select = document.createElement('select');
+    select.setAttribute('data-ghost-id', 'checkout.state');
+    for (const optText of ['Select', 'New York', 'Texas']) {
+      const opt = document.createElement('option');
+      opt.textContent = optText;
+      select.appendChild(opt);
+    }
+    document.body.appendChild(select);
+    expect(describeAction({ id: '1', type: 'select_option', target_id: 'checkout.state', option: 'NY' })).toBe('Choose "NY" in state');
+
+    const label = document.createElement('label');
+    label.setAttribute('for', 'st');
+    label.textContent = 'State';
+    select.id = 'st';
+    document.body.appendChild(label);
+    expect(describeAction({ id: '1', type: 'select_option', target_id: 'checkout.state', option: 'NY' })).toBe('Choose "NY" in State');
+  });
 });
 

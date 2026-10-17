@@ -2262,7 +2262,7 @@ async def test_sql_alchemy_chat_store_returns_utc_datetimes(tmp_path):
     db_file = tmp_path / "utc_test.db"
     engine = create_async_engine(f"sqlite+aiosqlite:///{db_file}")
     store = SQLAlchemyChatStore(engine, tenant_id="tenant_utc")
-    await store.init_db()
+    await store.create_tables()
 
     session = await store.create_session("u_utc", "tenant_utc", "New Conversation")
     assert session.created_at.tzinfo == timezone.utc

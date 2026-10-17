@@ -240,7 +240,8 @@ async def create_session(request: Request, user_id: str = Depends(require_user))
         "session_id": s.session_id,
         "title": s.title,
         "summary": s.summary,
-        "updated_at": s.updated_at.isoformat(),
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
     }
 
 
@@ -256,7 +257,8 @@ async def list_sessions(user_id: str = Depends(require_user)):
                     "session_id": s.session_id,
                     "title": s.title,
                     "summary": s.summary,
-                    "updated_at": s.updated_at.isoformat(),
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
                 }
                 for s in sessions
             ]

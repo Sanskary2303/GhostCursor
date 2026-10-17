@@ -12,6 +12,11 @@ export * from './core/native-setter';
 // Engine components
 export { createCursorSvg, BRAND, CURSOR_POLYGON, CURSOR_VIEWBOX, CURSOR_WIDTH, CURSOR_HOTSPOT } from './core/cursor/assets';
 export type { CursorSvgOptions } from './core/cursor/assets';
+export { CursorController, poseTransform, FLIGHT_EASING } from './core/cursor/CursorController';
+export type { CursorState, CursorOutcome, CursorControllerOptions } from './core/cursor/CursorController';
+export { aimPoint, flightDuration, sampleFlight, controlPoints } from './core/cursor/path';
+export { createBridge, INITIAL_WIDGET_STATE } from './core/bridge';
+export type { Bridge, WidgetBridgeState, DockOutcome } from './core/bridge';
 export { MIDNIGHT, DAYLIGHT, resolveMode, tokensFor, tokensToCss } from './core/theme/tokens';
 export type { ThemeMode, ThemeTokens } from './core/theme/tokens';
 export { ElementResolver } from './core/executor/ElementResolver';

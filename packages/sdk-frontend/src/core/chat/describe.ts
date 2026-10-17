@@ -15,7 +15,9 @@ const SAFE_ID = /^[a-zA-Z0-9_.:-]{1,120}$/;
 const MAX_LABEL = 40;
 
 function humanizeId(id: string): string {
-  const last = id.split('.').pop() || id;
+  const parts = id.split('.');
+  const tail = parts[parts.length - 1] || id;
+  const last = /^\d+$/.test(tail) && parts.length > 1 ? `${parts[parts.length - 2]} ${tail}` : tail;
   return last.replace(/[_-]+/g, ' ').replace(/\bbtn\b/i, 'button').trim();
 }
 

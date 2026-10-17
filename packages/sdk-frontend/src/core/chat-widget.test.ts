@@ -212,5 +212,80 @@ describe('ChatWidget shell', () => {
     await tick();
     expect(sendCount).toBe(2);
   });
+
+  it('calls onShowMe with only unfinished steps (failed and skipped)', async () => {
+    const bridge = createBridge({ ...INITIAL_WIDGET_STATE });
+    let showedSteps: any = null;
+    const { root } = mount({
+      onSendMessage: async () => ({
+        reply: 'Plan',
+        status: 'awaiting_actions',
+        runId: 'r',
+        revision: 0,
+        actions: [
+          { id: 'a1', type: 'click', target_id: 'cart.step1', explanation: 'Step 1' },
+          { id: 'a2', type: 'click', target_id: 'cart.step2', explanation: 'Step 2' },
+          { id: 'a3', type: 'click', target_id: 'cart.step3', explanation: 'Step 3' },
+        ],
+      }),
+      onActionApproval: async () => {
+        bridge.set({
+          lastRun: {
+            results: [
+              { ok: true },
+              { ok: false, error: 'Target obstructed' },
+            ],
+            ms: 3100,
+          },
+        });
+        return {
+          reply: 'Plan failed at step 2',
+          status: 'failed',
+          runId: 'r',
+          revision: 1,
+        };
+      },
+      onShowMe: (steps) => {
+        showedSteps = steps;
+      },
+    }, bridge);
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const textarea = root.querySelector('textarea.gc-input') as HTMLTextAreaElement;
+    textarea.value = 'Checkout';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    const form = root.querySelector('form.gc-composer') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    await tick();
+    await tick();
+    await tick();
+
+    const approveBtn = root.querySelector('.gc-plan .gc-btn--primary') as HTMLButtonElement;
+    expect(approveBtn).not.toBeNull();
+    approveBtn.click();
+
+    await tick();
+    await tick();
+    await tick();
+
+    const card = root.querySelector('.gc-card--recovery')!;
+    expect(card).not.toBeNull();
+    expect(card.querySelectorAll('.gc-card-step')).toHaveLength(3);
+
+    const showMeBtn = card.querySelector('button.gc-btn--ghost') as HTMLButtonElement;
+    expect(showMeBtn).not.toBeNull();
+    showMeBtn.click();
+
+    expect(showedSteps).toHaveLength(2);
+    expect(showedSteps).toEqual([
+      { targetId: 'cart.step2', label: 'Click step2' },
+      { targetId: 'cart.step3', label: 'Click step3' },
+    ]);
+  });
 });
 

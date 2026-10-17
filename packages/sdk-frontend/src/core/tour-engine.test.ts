@@ -89,6 +89,21 @@ describe('TourEngine', () => {
     await tour.stop();
   });
 
+  it('uses transparent overlay background and 0.55 opacity spotlight shadow', async () => {
+    setupButtons();
+    const tour = new TourEngine();
+    await tour.start(steps, document.body);
+
+    const shadow = document.getElementById('ghost-tour-container')!.shadowRoot!;
+    const overlay = shadow.getElementById('ghost-tour-overlay')!;
+    const spotlight = shadow.getElementById('ghost-tour-spotlight')!;
+
+    expect(overlay.style.background).toBe('transparent');
+    expect(spotlight.style.boxShadow).toContain('0.55');
+
+    await tour.stop();
+  });
+
   it('moves to step 2 on ArrowRight from document, but ignores space from input', async () => {
     setupButtons();
     const input = document.createElement('input');

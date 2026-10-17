@@ -26,6 +26,7 @@ describe('describeAction', () => {
 
   it('falls back to a humanised id and formats other types', () => {
     expect(describeAction({ id: '1', type: 'click', target_id: 'checkout.place_order_btn' })).toBe('Click place order button');
+    expect(describeAction({ id: '1', type: 'click', target_id: 'product.size.10' })).toBe('Click size 10');
     expect(describeAction({ id: '2', type: 'navigate', target_page: 'product/air-max-90' })).toBe('Go to Product Air Max 90');
     expect(describeAction({ id: '3', type: 'fill_input', target_id: 'checkout.zip', value: '10001' })).toBe('Type "10001" into zip');
   });

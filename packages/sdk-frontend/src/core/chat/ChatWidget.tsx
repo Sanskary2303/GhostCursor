@@ -269,7 +269,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
   private showMeWhere = (card: RunCard) => {
     const steps = card.steps
-      .filter(s => Boolean(s.targetId))
+      .filter(s => s.status !== 'done' && Boolean(s.targetId))
       .map(s => ({ targetId: s.targetId as string, label: s.label }));
     if (steps.length) this.props.onShowMe?.(steps);
   };
@@ -617,7 +617,7 @@ const MessageBubble = ({ message, onOptionSelect, onRetry, onShowMe }: MessageBu
   const showTyping = !isUser && message.isStreaming && !message.content;
   const card = message.card;
   const failedStepIndex = card ? card.steps.findIndex(s => s.status === 'failed') : -1;
-  const hasTargets = card ? card.steps.some(s => Boolean(s.targetId)) : false;
+  const hasTargets = card ? card.steps.some(s => s.status !== 'done' && Boolean(s.targetId)) : false;
 
   return (
     <div className={`gc-msg ${isUser ? 'gc-msg--user' : 'gc-msg--assistant'}`}>

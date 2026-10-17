@@ -21,7 +21,7 @@ const DEFAULT_OPTIONS: Required<TourOptions> = {
   onComplete: () => {},
   onSkip: () => {},
   spotlightColor: '#3B7BDF',
-  spotlightOpacity: 0.85,
+  spotlightOpacity: 0.55,
   onStepShown: () => {},
 };
 
@@ -100,11 +100,12 @@ export class TourEngine {
       left: 0;
       width: 100vw;
       height: 100vh;
-      background: rgba(0, 0, 0, ${this.options.spotlightOpacity});
+      background: transparent;
       pointer-events: none;
       z-index: 2147483000;
       display: none;
     `;
+    this.state.overlayElement.style.background = 'transparent';
     this.state.shadowRoot.appendChild(this.state.overlayElement);
 
     // Create spotlight (the hole in the overlay)
@@ -192,8 +193,8 @@ export class TourEngine {
         animation: ghost-tour-pulse 2s ease-in-out infinite;
       }
       @keyframes ghost-tour-pulse {
-        0%, 100% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.85), 0 0 20px rgba(59, 123, 223, 0.5); }
-        50% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.85), 0 0 30px rgba(59, 123, 223, 0.8); }
+        0%, 100% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55), 0 0 20px rgba(59, 123, 223, 0.5); }
+        50% { box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55), 0 0 30px rgba(59, 123, 223, 0.8); }
       }
       #ghost-tour-overlay {
         animation: ghost-tour-fade-in 0.3s ease-out;

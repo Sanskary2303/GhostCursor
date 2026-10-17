@@ -274,6 +274,94 @@ async def test_continue_with_user_answer(auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_jordan_flow_plans_then_asks_then_fills(auth_headers):
+    """Test Jordan flow: 4 actions, then asks address question, then fills checkout form, then completes"""
+    req_id = str(uuid.uuid4())
+    payload = {
+        "protocolVersion": "1",
+        "requestId": req_id,
+        "message": "Add the Air Jordan 1 in size 10 to my cart and proceed to checkout",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. Start with Jordan message
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        run_id = data["runId"]
+        rev = data["revision"]
+        assert data["status"] == "awaiting_actions"
+        assert len(data["actions"]) == 4
+        assert data["actions"][0]["type"] == "navigate"
+        assert data["actions"][0]["target_page"] == "product/jordan-1"
+
+        # 2. Continue with all 4 results ok: True -> Expect awaiting_answer
+        cont_res1 = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": rev,
+                "kind": "actions",
+                "results": [
+                    {"id": a["id"], "ok": True, "output": {}}
+                    for a in data["actions"]
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert cont_res1.status_code == 200
+        data1 = cont_res1.json()
+        rev1 = data1["revision"]
+        assert data1["status"] == "awaiting_answer"
+        assert len(data1["questions"]) > 0
+        assert "123 Main St, NYC (saved)" in data1["questions"][0]["options"]
+
+        # 3. Continue with kind: answer -> Expect awaiting_actions with fill_input for checkout.zip
+        cont_res2 = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": rev1,
+                "kind": "answer",
+                "answer": "123 Main St, NYC (saved)",
+            },
+            headers=auth_headers,
+        )
+        assert cont_res2.status_code == 200
+        data2 = cont_res2.json()
+        rev2 = data2["revision"]
+        assert data2["status"] == "awaiting_actions"
+        assert any(
+            a.get("type") == "fill_input" and a.get("target_id") == "checkout.zip"
+            for a in data2["actions"]
+        )
+
+        # 4. Continue with all results ok: True -> Expect completed and "air jordan 1" in reply.lower()
+        cont_res3 = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json={
+                "protocolVersion": "1",
+                "eventId": str(uuid.uuid4()),
+                "revision": rev2,
+                "kind": "actions",
+                "results": [
+                    {"id": a["id"], "ok": True, "output": {}}
+                    for a in data2["actions"]
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert cont_res3.status_code == 200
+        data3 = cont_res3.json()
+        assert data3["status"] == "completed"
+        assert "air jordan 1" in data3["reply"].lower()
+
+
+@pytest.mark.asyncio
 async def test_cancel_run(auth_headers):
     """Test cancelling an ongoing run"""
     req_id = str(uuid.uuid4())

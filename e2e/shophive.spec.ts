@@ -99,7 +99,7 @@ test('tracking question runs a tour on the orders page', async ({ page }) => {
   await expect(nextBtn).toHaveText('Finish');
   await nextBtn.click();
 
-  await expect(chat(page)).toContainText('track an order', { timeout: 30_000 });
+  await expect(chat(page)).toContainText('track an order or a return', { timeout: 30_000 });
 });
 
 test('dark mode', async ({ page }) => {
@@ -490,6 +490,33 @@ test('a failed step shows a recovery card, and Try again makes a new plan', asyn
   await approve(page);
   await expect(chat(page).locator('.gc-card--receipt')).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('link', { name: 'Cart (1)' })).toBeVisible({ timeout: 20_000 });
+});
+
+test('Air Jordan to checkout: multi-page plan, address question, filled form', async ({ page }) => {
+  await page.goto('/');
+  await ask(page, 'Add the Air Jordan 1 in size 10 to my cart and proceed to checkout');
+  await approve(page);
+  await expect(page.getByRole('link', { name: 'Cart (1)' })).toBeVisible({ timeout: 30_000 });
+  await expect(page).toHaveURL(/\/checkout$/, { timeout: 30_000 });
+  await page.getByRole('button', { name: '123 Main St, NYC (saved)' }).click({ timeout: 30_000 });
+  await approve(page);
+  await expect(page.locator('[data-ghost-id="checkout.zip"]')).toHaveValue('10001', { timeout: 30_000 });
+  await expect(page.locator('[data-ghost-id="checkout.state"]')).toHaveValue('NY');
+  await expect(chat(page)).toContainText('Air Jordan 1 (size 10) is in the cart', { timeout: 20_000 });
+});
+
+test('track my return: 3-step tour starting at the Orders tab', async ({ page }) => {
+  await page.goto('/');
+  await ask(page, 'How do I track my return?');
+  await approve(page);
+  const tooltip = page.locator('#ghost-tour-tooltip');
+  await expect(tooltip).toContainText('Your orders and returns live under Orders.', { timeout: 15_000 });
+  await page.locator('#ghost-tour-next').click();
+  await expect(tooltip).toContainText('Step 2 of 3');
+  await page.locator('#ghost-tour-next').click();
+  await expect(tooltip).toContainText('Start a return here');
+  await page.locator('#ghost-tour-next').click();
+  await expect(chat(page)).toContainText('track an order or a return', { timeout: 20_000 });
 });
 
 test.describe('reduced motion', () => {

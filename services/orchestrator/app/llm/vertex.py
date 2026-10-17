@@ -186,10 +186,11 @@ CHECKOUT_FILL_ACTIONS = [
 # Completion text per scenario, matched against the user's first message in the run.
 # The first match wins, so put more specific phrases first.
 COMPLETION_REPLIES = [
+    ("jordan", "Your Air Jordan 1 (size 10) is in the cart and your shipping address is filled in. Review it, then place the order when you're ready."),
     ("dark mode", "Theme switched to Dark Mode 🌙"),
     ("air max", "Added the Air Max 90 (size 10) to your cart 🛒"),
     ("add to cart", "Added it to your cart 🛒"),
-    ("track", "That's how you track an order. The carrier and tracking number are on each order card."),
+    ("track", "That's how you track an order or a return: the timeline on each order card shows every update."),
     ("checkout", "Your shipping address is filled in. Review it, then place the order when you're ready."),
 ]
 DEFAULT_COMPLETION = "Done. All steps completed."
@@ -222,6 +223,16 @@ class MockVertexAIClient(BaseVertexClient):
 
     # Deterministic fixture responses
     FIXTURES = {
+        "jordan": {
+            "status": "awaiting_actions",
+            "reply": "I'll add the Air Jordan 1 in size 10 to your cart, then take you to checkout:",
+            "actions": [
+                {"type": "navigate", "target_page": "product/jordan-1", "explanation": "Open the Air Jordan 1 page"},
+                {"type": "click", "target_id": "product.size.10", "explanation": "Pick size 10"},
+                {"type": "click", "target_id": "product.add_to_cart_btn", "explanation": "Add it to your cart"},
+                {"type": "navigate", "target_page": "checkout", "explanation": "Go to checkout"},
+            ],
+        },
         "dark mode": {
             "status": "awaiting_actions",
             "reply": "I'll switch ShopHive to dark mode for you. Here's my plan:",
@@ -256,13 +267,13 @@ class MockVertexAIClient(BaseVertexClient):
         },
         "track": {
             "status": "awaiting_actions",
-            "reply": "Let me show you how to track your order with a guided tour:",
+            "reply": "Let me show you where to track orders and returns:",
             "actions": [
-                {"type": "navigate", "target_page": "orders", "explanation": "Navigate to orders page"},
-                {"type": "guided_tour", "explanation": "Take a guided tour of order tracking", "steps": [
-                    {"target_id": "orders.order.SH-1024", "message": "Here is your order SH-1024", "spotlight": True},
-                    {"target_id": "orders.SH-1024.status", "message": "Check the delivery status here", "spotlight": True},
-                    {"target_id": "orders.SH-1024.track", "message": "Click track to see carrier updates", "spotlight": True},
+                {"type": "navigate", "target_page": "orders", "explanation": "Open your orders"},
+                {"type": "guided_tour", "explanation": "Show where orders and returns are tracked", "steps": [
+                    {"target_id": "nav.orders", "message": "Your orders and returns live under Orders.", "spotlight": True},
+                    {"target_id": "orders.SH-1024.tracking", "message": "This timeline shows every carrier update, including returns.", "spotlight": True},
+                    {"target_id": "orders.SH-1024.return", "message": "Start a return here. Its progress then appears in the same timeline.", "spotlight": True},
                 ]},
             ],
         },
@@ -282,7 +293,7 @@ class MockVertexAIClient(BaseVertexClient):
         },
         "sizes": {
             "status": "completed",
-            "reply": "Based on what I can see on the product page, the Air Max 90 is available in US Men's sizes 7 through 13. Size 10 is currently in stock with 15 units available. Would you like me to add a specific size to your cart?",
+            "reply": "Based on what I can see on the product page, the Air Max 90 is available in US Men's sizes 7 through 13. Size 10 is currently in stock with 20 units available. Would you like me to add a specific size to your cart?",
         },
         "margin": {
             "status": "awaiting_tools",
@@ -392,6 +403,25 @@ class MockVertexAIClient(BaseVertexClient):
                     revision=revision,
                     status="failed",
                     reply=f"I couldn't finish: {first_error}. Steps done before it were kept.",
+                ))
+            turns = transcript if transcript is not None else (run_context.get("transcript") or [])
+            request = _first_user_text(turns).lower()
+            already_asked = any(
+                isinstance(part, dict) and (part.get("function_call") or {}).get("name") == "ask_clarification"
+                for turn in turns
+                for part in turn.get("parts", [])
+            )
+            if "jordan" in request and "checkout" in request and not already_asked:
+                return _record_and_return(HostedRunResponse(
+                    protocolVersion="1",
+                    runId=run_id,
+                    revision=revision,
+                    status="awaiting_answer",
+                    reply="It's in your cart and you're at checkout. Where should I ship it?",
+                    questions=[ClarifyQuestion(
+                        question="Which shipping address should I use?",
+                        options=["123 Main St, NYC (saved)", "Enter a new address"],
+                    )],
                 ))
             return _record_and_return(HostedRunResponse(
                 protocolVersion="1",

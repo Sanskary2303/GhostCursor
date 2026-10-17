@@ -3,7 +3,7 @@ from pathlib import Path
 from services.orchestrator.app.llm.vertex import MockVertexAIClient, CHECKOUT_FILL_ACTIONS
 
 SRC = Path(__file__).resolve().parents[3] / "demo" / "shophive" / "frontend" / "src"
-PAGES = {"", "product/air-max-90", "cart", "checkout", "orders", "settings"}
+PAGES = {"", "product/air-max-90", "product/jordan-1", "cart", "checkout", "orders", "settings"}
 
 def _id_patterns():
     text = "\n".join(p.read_text(encoding="utf-8") for p in SRC.rglob("*.tsx"))

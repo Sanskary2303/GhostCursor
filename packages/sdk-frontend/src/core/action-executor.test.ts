@@ -138,5 +138,30 @@ describe('ActionExecutor', () => {
     expect(result.results[0].error).toBe('cancelled by user');
     expect(clicked).not.toHaveBeenCalled();
   });
+
+  it('calls onAim, onBeforeAct, acts, then onStepEnd in that order', async () => {
+    const btn = document.createElement('button');
+    btn.setAttribute('data-ghost-id', 'order_btn');
+    document.body.appendChild(btn);
+    const log: string[] = [];
+    btn.addEventListener('click', () => log.push('click'));
+
+    const executor = new ActionExecutor({
+      timeout: 500,
+      onAim: async () => {
+        log.push('aim');
+      },
+      onBeforeAct: async () => {
+        log.push('before');
+      },
+      onStepEnd: (_info, result) => {
+        log.push(`end:${result.ok}`);
+      },
+    });
+
+    const result = await executor.execute([{ id: 'o1', type: 'click', target_id: 'order_btn' }]);
+    expect(result.success).toBe(true);
+    expect(log).toEqual(['aim', 'before', 'click', 'end:true']);
+  });
 });
 

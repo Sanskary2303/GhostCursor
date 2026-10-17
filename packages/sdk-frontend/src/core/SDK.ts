@@ -3,13 +3,14 @@ import type { PageContext, Action, ToolResult, Target, PublicResponse } from './
 import { ContextProvider } from './context/ContextProvider';
 import { createTransport, TransportManager, Transport } from './transport/Transport';
 import { ActionExecutor, type ExecutionResult } from './executor/ActionExecutor';
-import { CursorController, type CursorOutcome } from './cursor/CursorController';
+import { CursorController, type CursorOutcome, type RingHandle } from './cursor/CursorController';
 import { createBridge, INITIAL_WIDGET_STATE, type WidgetBridgeState } from './bridge';
 import { TourEngine } from './engine/TourEngine';
 import { ChatWidget, Message } from './chat/ChatWidget';
 import { resolveTargetWithCascade, registerTarget } from './dom-utils';
 import { BRAND } from './cursor/assets';
 import type { ThemeMode } from './theme/tokens';
+import { describeAction } from './chat/describe';
 
 export interface GhostCursorSDK {
   dispose(): void;
@@ -106,12 +107,35 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
 
   const transportManager = new TransportManager(transport);
 
+  let activeRing: RingHandle | null = null;
   const actionExecutor = new ActionExecutor({
     timeout: 5000,
     requireApproval: requireApprovalForActions,
     allowSemanticLookup,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
-    onAim: (element) => cursor.flyTo(element),
+    onAim: async (element, info) => {
+      activeRing?.remove();
+      activeRing = null;
+      await cursor.flyTo(element);
+      if (info.signal.aborted) return;
+      activeRing = cursor.highlight(element);
+      cursor.setCaption(`${info.index + 1}/${info.total} • ${describeAction(info.action)}`);
+    },
+    onBeforeAct: async (element, info) => {
+      if (info.action.type === 'fill_input') {
+        await cursor.typeOverlay(element, String(info.action.value ?? ''), info.signal);
+      } else {
+        await cursor.press();
+      }
+    },
+    onStepEnd: (_info, result) => {
+      cursor.setCaption(null);
+      const ring = activeRing;
+      activeRing = null;
+      if (!ring) return;
+      ring.setTone(result.ok ? 'success' : 'error');
+      setTimeout(() => ring.remove(), result.ok ? 350 : 900);
+    },
   });
 
   const tourEngine = new TourEngine({
@@ -299,10 +323,12 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     try {
       execution = await actionExecutor.execute(actions);
     } catch (error) {
+      cursor.setCaption(null);
       void cursor.dock('error');
       throw error;
     }
     const outcome: CursorOutcome = execution.success ? 'success' : execution.error === 'cancelled' ? 'stopped' : 'error';
+    cursor.setCaption(null);
     void cursor.dock(outcome);
     return execution;
   }

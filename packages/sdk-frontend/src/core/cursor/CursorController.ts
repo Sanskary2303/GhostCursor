@@ -1,9 +1,16 @@
 import { BRAND, CURSOR_HOTSPOT, createCursorSvg } from './assets';
 import { aimPoint, flightDuration, sampleFlight, type Point } from './path';
-import { OVERLAY_CSS, OVERLAY_Z } from './overlayStyles';
+import { OVERLAY_CSS, OVERLAY_Z, RING_CSS, RING_Z } from './overlayStyles';
 
 export type CursorState = 'docked' | 'launching' | 'flying' | 'aiming' | 'acting' | 'waiting' | 'returning';
 export type CursorOutcome = 'success' | 'error' | 'stopped';
+export type RingTone = 'active' | 'success' | 'error';
+export interface RingHandle {
+  setTone: (tone: RingTone) => void;
+  remove: () => void;
+}
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 export interface CursorControllerOptions {
   /** Screen rect of the dock socket (or launcher) in the widget, or null if it isn't rendered. */
@@ -41,6 +48,10 @@ export class CursorController {
   private root: ShadowRoot | null = null;
   private cursorEl: HTMLElement | null = null;
   private trailEls: HTMLElement[] = [];
+  private ringHost: HTMLElement | null = null;
+  private ringRoot: ShadowRoot | null = null;
+  private captionEl: HTMLElement | null = null;
+  private rings = new Set<RingHandle>();
   private running = new Set<Animation>();
   private pos: Point = { x: 0, y: 0 };
   private current: CursorState = 'docked';
@@ -101,6 +112,125 @@ export class CursorController {
     this.setState('docked');
   }
 
+  /** Ring around the element that follows it every frame until removed. */
+  highlight(el: Element): RingHandle {
+    this.mount();
+    const root = this.ringRoot;
+    if (!root) return { setTone: () => {}, remove: () => {} };
+    const ring = document.createElement('div');
+    ring.className = 'gc-ring';
+    ring.setAttribute('data-tone', 'active');
+    const radius = parseFloat(getComputedStyle(el).borderTopLeftRadius || '0');
+    ring.style.borderRadius = `${(Number.isFinite(radius) ? radius : 4) + 6}px`;
+    root.appendChild(ring);
+    let alive = true;
+    const place = () => {
+      if (!alive) return;
+      const r = el.getBoundingClientRect();
+      ring.style.left = `${r.left - 6}px`;
+      ring.style.top = `${r.top - 6}px`;
+      ring.style.width = `${r.width + 12}px`;
+      ring.style.height = `${r.height + 12}px`;
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(place);
+    };
+    place();
+    const handle: RingHandle = {
+      setTone: (tone) => ring.setAttribute('data-tone', tone),
+      remove: () => {
+        alive = false;
+        this.rings.delete(handle);
+        if (ring.parentNode) ring.parentNode.removeChild(ring);
+      },
+    };
+    this.rings.add(handle);
+    return handle;
+  }
+
+  /** Press: dip to 0.86 with two ripples from the tip. */
+  async press(): Promise<void> {
+    const cursor = this.cursorEl;
+    if (!cursor || this.disposed) return;
+    this.setState('acting');
+    const p = this.pos;
+    const reduced = this.reduced();
+    if (!reduced) this.spawnRipples(p);
+    await this.play(cursor, [
+      { transform: poseTransform({ ...p, scale: 1 }) },
+      { transform: poseTransform({ ...p, scale: 0.86 }), offset: 0.5 },
+      { transform: poseTransform({ ...p, scale: 1 }) },
+    ], reduced ? 0 : 180, 'ease-out');
+  }
+
+  /** Shows `text` being typed over the field. Visual only: the caller commits the value afterwards. */
+  async typeOverlay(el: HTMLElement, text: string, signal?: AbortSignal): Promise<void> {
+    const root = this.root;
+    if (!root || this.disposed) return;
+    this.setState('acting');
+    const rect = el.getBoundingClientRect();
+    const cs = getComputedStyle(el);
+    const ghost = document.createElement('div');
+    ghost.className = 'gc-ghost-text';
+    ghost.style.left = `${rect.left}px`;
+    ghost.style.top = `${rect.top}px`;
+    ghost.style.width = `${rect.width}px`;
+    ghost.style.height = `${rect.height}px`;
+    ghost.style.paddingLeft = cs.paddingLeft;
+    ghost.style.paddingRight = cs.paddingRight;
+    ghost.style.fontFamily = cs.fontFamily;
+    ghost.style.fontSize = cs.fontSize;
+    ghost.style.fontWeight = cs.fontWeight;
+    ghost.style.color = cs.color;
+    ghost.style.borderRadius = cs.borderRadius;
+    const bg = cs.backgroundColor;
+    ghost.style.background = bg && bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent' ? bg : '#fff';
+    root.appendChild(ghost);
+    try {
+      const shown = text.slice(0, 60);
+      if (this.reduced()) {
+        ghost.textContent = shown;
+        await sleep(150);
+        return;
+      }
+      const perChar = Math.min(40, 1200 / Math.max(shown.length, 1));
+      for (let i = 1; i <= shown.length; i++) {
+        if (signal?.aborted) return;
+        ghost.textContent = shown.slice(0, i);
+        await sleep(perChar);
+      }
+      await sleep(120);
+    } finally {
+      if (ghost.parentNode) ghost.parentNode.removeChild(ghost);
+    }
+  }
+
+  /** Pill next to the cursor (plain text, max 60 characters). null hides it. */
+  setCaption(text: string | null): void {
+    const caption = this.captionEl;
+    if (!caption) return;
+    if (!text) {
+      caption.setAttribute('data-show', '0');
+      return;
+    }
+    caption.textContent = text.length > 60 ? `${text.slice(0, 59)}…` : text;
+    const x = Math.min(this.pos.x + 22, window.innerWidth - 270);
+    const y = Math.min(this.pos.y + 18, window.innerHeight - 30);
+    caption.style.transform = `translate(${x}px, ${y}px)`;
+    caption.setAttribute('data-show', '1');
+  }
+
+  private spawnRipples(p: Point): void {
+    const root = this.root;
+    if (!root) return;
+    for (const extra of ['', ' gc-ripple--late']) {
+      const ripple = document.createElement('div');
+      ripple.className = `gc-ripple${extra}`;
+      ripple.style.left = `${p.x}px`;
+      ripple.style.top = `${p.y}px`;
+      root.appendChild(ripple);
+      setTimeout(() => ripple.parentNode?.removeChild(ripple), 700);
+    }
+  }
+
   /** Freeze all motion where it is (Stop). Pending flyTo()/dock() promises resolve. */
   cancel(): void {
     for (const anim of [...this.running]) {
@@ -119,6 +249,11 @@ export class CursorController {
   dispose(): void {
     this.cancel();
     this.disposed = true;
+    for (const ring of [...this.rings]) ring.remove();
+    if (this.ringHost && this.ringHost.parentNode) this.ringHost.parentNode.removeChild(this.ringHost);
+    this.ringHost = null;
+    this.ringRoot = null;
+    this.captionEl = null;
     if (this.host && this.host.parentNode) this.host.parentNode.removeChild(this.host);
     this.host = null;
     this.root = null;
@@ -174,6 +309,26 @@ export class CursorController {
     cursor.className = 'gc-cursor gc-main';
     cursor.appendChild(createCursorSvg(document, { accent: this.accent }));
     root.appendChild(cursor);
+
+    const caption = document.createElement('div');
+    caption.className = 'gc-caption';
+    caption.setAttribute('data-show', '0');
+    root.appendChild(caption);
+    this.captionEl = caption;
+
+    const ringHost = document.createElement('div');
+    ringHost.id = 'ghost-cursor-rings';
+    ringHost.setAttribute('aria-hidden', 'true');
+    ringHost.style.cssText = `position:fixed;inset:0;pointer-events:none;z-index:${RING_Z};`;
+    ringHost.style.setProperty('--gc-accent', this.accent);
+    const ringRoot = ringHost.attachShadow({ mode: 'open' });
+    const ringStyle = document.createElement('style');
+    ringStyle.textContent = RING_CSS;
+    ringRoot.appendChild(ringStyle);
+    document.body.appendChild(ringHost);
+    this.ringHost = ringHost;
+    this.ringRoot = ringRoot;
+
     document.body.appendChild(host);
     this.host = host;
     this.root = root;
@@ -219,6 +374,7 @@ export class CursorController {
     const cursor = this.cursorEl;
     if (!cursor) return false;
     const from = this.pos;
+    this.captionEl?.setAttribute('data-show', '0');
     this.setState(state);
 
     if (this.reduced()) {

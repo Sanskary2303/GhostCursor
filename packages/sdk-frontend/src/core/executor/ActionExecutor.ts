@@ -25,6 +25,10 @@ export interface ExecutionOptions {
   onCursorMove?: (element: HTMLElement) => void;
   /** Called and awaited once the target is on screen, before acting. Fly the cursor here. */
   onAim?: (element: HTMLElement, info: StepInfo) => Promise<void> | void;
+  /** Called and awaited right before the DOM is changed (press / typing animations). */
+  onBeforeAct?: (element: HTMLElement, info: StepInfo) => Promise<void> | void;
+  /** Called after every step with its result. Not awaited. */
+  onStepEnd?: (info: StepInfo, result: ToolResult) => void;
   allowSemanticLookup?: boolean;
 }
 
@@ -40,6 +44,8 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   onProgress: () => {},
   onCursorMove: () => {},
   onAim: () => {},
+  onBeforeAct: () => {},
+  onStepEnd: () => {},
   allowSemanticLookup: false,
 };
 
@@ -81,6 +87,14 @@ async function animateCursorTo(element: HTMLElement, options: Required<Execution
 
 function cancelledResult(): ToolResult {
   return { id: crypto.randomUUID(), ok: false, error: 'cancelled by user' };
+}
+
+/** Flies the cursor to the element, then plays the "about to act" animation. False when stopped. */
+async function prepareToAct(element: HTMLElement, options: Required<ExecutionOptions>, info: StepInfo): Promise<boolean> {
+  await animateCursorTo(element, options, info);
+  if (info.signal.aborted) return false;
+  await options.onBeforeAct(element, info);
+  return !info.signal.aborted;
 }
 
 const TARGET_ID_PATTERN = /^[a-zA-Z0-9_.:-]{1,120}$/;
@@ -173,8 +187,7 @@ async function executeNavigate(targetPage: string, options: Required<ExecutionOp
 
   const link = document.querySelector<HTMLElement>(`[data-ghost-nav="${CSS.escape(targetPage)}"], [data-ghost-nav="${CSS.escape(path)}"]`);
   if (link) {
-    await animateCursorTo(link, options, info);
-    if (info.signal.aborted) return cancelledResult();
+    if (!(await prepareToAct(link, options, info))) return cancelledResult();
     link.click();
   } else {
     window.history.pushState({}, '', path);
@@ -214,8 +227,7 @@ async function executeClick(targetId: string, options: Required<ExecutionOptions
     return { id: crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options, info);
-  if (info.signal.aborted) return cancelledResult();
+  if (!(await prepareToAct(freshElement, options, info))) return cancelledResult();
   freshElement.click();
 
   options.onProgress(`click:${targetId}`, 'completed');
@@ -255,8 +267,7 @@ async function executeFillInput(
     return { id: crypto.randomUUID(), ok: false, error: `Target is not an input or textarea: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options, info);
-  if (info.signal.aborted) return cancelledResult();
+  if (!(await prepareToAct(freshElement, options, info))) return cancelledResult();
 
   const stringValue = String(value);
   setNativeValue(freshElement, stringValue, { commitEvent: 'input' });
@@ -303,8 +314,7 @@ async function executeSelectOption(
     return { id: crypto.randomUUID(), ok: false, error: `Target is not a select element: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options, info);
-  if (info.signal.aborted) return cancelledResult();
+  if (!(await prepareToAct(freshElement, options, info))) return cancelledResult();
 
   const stringValue = String(value);
   const success = setNativeSelectValue(freshElement, stringValue);
@@ -349,8 +359,7 @@ async function executeToggleSwitch(
     return { id: crypto.randomUUID(), ok: false, error: `Target is not a checkbox or radio: ${targetId}` };
   }
 
-  await animateCursorTo(freshElement, options, info);
-  if (info.signal.aborted) return cancelledResult();
+  if (!(await prepareToAct(freshElement, options, info))) return cancelledResult();
 
   setNativeCheckboxState(freshElement, state);
   await new Promise(resolve => setTimeout(resolve, 0));
@@ -474,6 +483,11 @@ export class ActionExecutor {
       const result = await executeAction(actions[i], this.options, info);
       result.id = actions[i].id ?? result.id;
       results.push(result);
+      try {
+        this.options.onStepEnd(info, result);
+      } catch (hookError) {
+        console.warn('[GhostCursor] onStepEnd hook failed:', hookError);
+      }
       if (this.abortController.signal.aborted || this.isStopped) {
         skipRest(i + 1, 'cancelled by user');
         this.isStopped = false;

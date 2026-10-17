@@ -79,3 +79,71 @@ describe('CursorController with Web Animations', () => {
   });
 });
 
+describe('acting animations', () => {
+  it('highlight() creates one .gc-ring inside #ghost-cursor-rings shadow root, sizes it, changes tone, and removes it', async () => {
+    const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true });
+    await c.undock();
+    const el = target(box(50, 60, 100, 40));
+    const handle = c.highlight(el);
+    const ringHost = document.getElementById('ghost-cursor-rings')!;
+    expect(ringHost).not.toBeNull();
+    const ring = ringHost.shadowRoot!.querySelector('.gc-ring') as HTMLElement;
+    expect(ring).not.toBeNull();
+    expect(ring.style.left).toBe(`${50 - 6}px`);
+    expect(ring.style.top).toBe(`${60 - 6}px`);
+    expect(ring.style.width).toBe(`${100 + 12}px`);
+    expect(ring.style.height).toBe(`${40 + 12}px`);
+    expect(ring.getAttribute('data-tone')).toBe('active');
+
+    handle.setTone('success');
+    expect(ring.getAttribute('data-tone')).toBe('success');
+
+    handle.remove();
+    expect(ringHost.shadowRoot!.querySelector('.gc-ring')).toBeNull();
+    c.dispose();
+  });
+
+  it('typeOverlay() shows textContent without inner elements while active and cleans up', async () => {
+    const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true });
+    await c.undock();
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.getBoundingClientRect = () => box(10, 20, 100, 30);
+
+    const promise = c.typeOverlay(input, '<b>10001</b>');
+    const overlay = document.getElementById('ghost-cursor-overlay')!;
+    const ghost = overlay.shadowRoot!.querySelector('.gc-ghost-text') as HTMLElement;
+    expect(ghost).not.toBeNull();
+    expect(ghost.textContent).toBe('<b>10001</b>');
+    expect(ghost.querySelector('b')).toBeNull();
+
+    await promise;
+    expect(overlay.shadowRoot!.querySelector('.gc-ghost-text')).toBeNull();
+    c.dispose();
+  });
+
+  it('setCaption() updates data-show and text, and hides on null', async () => {
+    const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true });
+    await c.undock();
+    const overlay = document.getElementById('ghost-cursor-overlay')!;
+    const caption = overlay.shadowRoot!.querySelector('.gc-caption') as HTMLElement;
+    expect(caption.getAttribute('data-show')).toBe('0');
+
+    c.setCaption('2/3 • Click Add to Cart');
+    expect(caption.getAttribute('data-show')).toBe('1');
+    expect(caption.textContent).toBe('2/3 • Click Add to Cart');
+
+    c.setCaption(null);
+    expect(caption.getAttribute('data-show')).toBe('0');
+    c.dispose();
+  });
+
+  it('press() sets state to acting', async () => {
+    const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true });
+    await c.undock();
+    await c.press();
+    expect(c.state).toBe('acting');
+    c.dispose();
+  });
+});
+

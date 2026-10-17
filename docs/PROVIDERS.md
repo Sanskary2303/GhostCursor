@@ -2,11 +2,40 @@
 
 ## Supported Providers
 
-Ghost Cursor uses **Google Vertex AI with Gemini 2.0** as the default provider.
+Ghost Cursor supports three provider backends configured via `GHOST_PROVIDER`:
+1. **Google ADK (`adk`)** - Google Agent Development Kit `LlmAgent` & `Runner` with `LongRunningFunctionTool` for pause/resume approval topology (ACT §6.1).
+2. **Vertex AI Gemini 2.0 (`vertex`)** - Direct `google-genai` client on Vertex AI with automatic function calling disabled for loopback control.
+3. **Mock Provider (`mock`)** - Deterministic offline mock for development and testing without GCP credentials.
 
 ---
 
-## Vertex AI (Recommended)
+## 1. Google ADK Provider (A1 Parity)
+
+The Google ADK provider implements ACT §6.1 specification using `google-adk==1.14.1`.
+
+### Topology & Mechanism
+ADK normally executes tools automatically in a loop. To preserve Ghost Cursor's security topology:
+- Frontend action tools (`navigate`, `click`, `fill_input`, `select_option`, `toggle_switch`, `guided_tour`, `ask_clarification`) and customer backend tools (`lookup_order`, etc.) are wrapped in `LongRunningFunctionTool`.
+- The tools return `None` during execution, which triggers ADK's long-running mechanism and causes the `Runner.run_async(...)` loop to yield the function call event and pause gracefully.
+- The cloud service receives the tool plan, responds to the client with `awaiting_actions` or `awaiting_tools`.
+- When the user approves actions or the gateway completes tools, the continuation turn passes `function_response` parts with matching call IDs, resuming the runner.
+
+### Configuration
+```bash
+export GHOST_PROVIDER=adk
+export GCP_PROJECT_ID=your-gcp-project-id
+export GCP_LOCATION=us-central1
+export GHOST_MODEL=gemini-2.0-flash
+```
+
+When `GHOST_PROVIDER=adk` is configured, Ghost Cursor automatically validates and maps:
+- `GCP_PROJECT_ID` $\to$ `GOOGLE_CLOUD_PROJECT`
+- `GCP_LOCATION` $\to$ `GOOGLE_CLOUD_LOCATION`
+- Sets `GOOGLE_GENAI_USE_VERTEXAI=TRUE`
+
+---
+
+## 2. Vertex AI Gemini 2.0 (`vertex`)
 
 ### Setup
 
@@ -22,18 +51,19 @@ gcloud auth application-default login
 
 3. Configure environment variables:
 ```bash
+export GHOST_PROVIDER=vertex
 export GCP_PROJECT_ID=your-gcp-project-id
 export GCP_LOCATION=us-central1
-export USE_MOCK_LLM=false
 ```
 
 ### Provider Configuration
 
 | Setting | Environment Variable | Default |
 |---------|---------------------|---------|
-| Project ID | `GCP_PROJECT_ID` | Required |
-| Location | `GCP_LOCATION` | `us-central1` |
-| Model | - | `gemini-2.0-flash` |
+| Provider | `GHOST_PROVIDER` | `mock` / `vertex` / `adk` |
+| Project ID | `GCP_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` | Required for `vertex`/`adk` |
+| Location | `GCP_LOCATION` or `GOOGLE_CLOUD_LOCATION` | `us-central1` |
+| Model | `GHOST_MODEL` | `gemini-2.0-flash` |
 
 ### Available Models
 

@@ -89,8 +89,8 @@ def init_globals():
     ghost_provider = os.getenv("GHOST_PROVIDER")
     ghost_store = os.getenv("GHOST_STORE")
 
-    if not ghost_provider or ghost_provider not in ("mock", "vertex"):
-        raise RuntimeError(f"GHOST_PROVIDER must be 'mock' or 'vertex', got: {ghost_provider!r}")
+    if not ghost_provider or ghost_provider not in ("mock", "vertex", "adk"):
+        raise RuntimeError(f"GHOST_PROVIDER must be 'mock', 'vertex', or 'adk', got: {ghost_provider!r}")
     if not ghost_store or ghost_store not in ("memory", "postgres"):
         raise RuntimeError(f"GHOST_STORE must be 'memory' or 'postgres', got: {ghost_store!r}")
 
@@ -106,6 +106,15 @@ def init_globals():
     if ghost_provider == "vertex" and not os.getenv("GCP_PROJECT_ID"):
         raise RuntimeError("GCP_PROJECT_ID is required when GHOST_PROVIDER is 'vertex'")
 
+    if ghost_provider == "adk":
+        project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        if not project_id:
+            raise RuntimeError("GCP_PROJECT_ID or GOOGLE_CLOUD_PROJECT is required when GHOST_PROVIDER is 'adk'")
+        os.environ["GOOGLE_GENAI_USE_VERTEXAI"] = "TRUE"
+        os.environ["GOOGLE_CLOUD_PROJECT"] = project_id
+        if os.getenv("GCP_LOCATION") and not os.getenv("GOOGLE_CLOUD_LOCATION"):
+            os.environ["GOOGLE_CLOUD_LOCATION"] = os.environ["GCP_LOCATION"]
+
     if run_store is None:
         if ghost_store == "postgres":
             run_store = PostgreSQLRunStore(os.environ["DATABASE_URL"])
@@ -118,6 +127,12 @@ def init_globals():
             location = os.getenv("GCP_LOCATION", "us-central1")
             model = os.getenv("GHOST_MODEL", "gemini-2.0-flash")
             vertex_client = GeminiProvider(project=project_id, location=location, model=model)
+        elif ghost_provider == "adk":
+            from .llm.adk import ADKProvider
+            project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+            location = os.getenv("GCP_LOCATION") or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
+            model = os.getenv("GHOST_MODEL", "gemini-2.0-flash")
+            vertex_client = ADKProvider(project=project_id, location=location, model=model)
         else:
             vertex_client = MockVertexAIClient()
 

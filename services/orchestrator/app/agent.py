@@ -133,6 +133,37 @@ Available Targets: {current_context.get('availableTargets', [])}
     )
 
 
+def create_adk_agent(
+    brain_content: str,
+    available_targets: list,
+    current_context: dict,
+    customer_backend_tools: Optional[List[Any]] = None,
+    model: Any = "gemini-2.0-flash",
+) -> Any:
+    """
+    Instantiates the Google ADK Agent with dynamic brain context,
+    fixed frontend tools, and customer backend tools (ACT §6.1).
+    """
+    from google.adk.agents.llm_agent import LlmAgent
+    from .llm.adk import build_adk_tools
+
+    ghost_agent = create_ghost_agent(
+        brain_content=brain_content,
+        available_targets=available_targets,
+        current_context=current_context,
+        customer_backend_tools=customer_backend_tools,
+    )
+
+    adk_tools = build_adk_tools(ghost_agent.tools)
+
+    return LlmAgent(
+        name=ghost_agent.name,
+        model=model,
+        instruction=ghost_agent.instruction,
+        tools=adk_tools,
+    )
+
+
 def _format_targets(targets: list) -> str:
     """Format available targets for the agent instruction."""
     if not targets:

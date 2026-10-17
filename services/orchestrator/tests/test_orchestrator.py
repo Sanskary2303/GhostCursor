@@ -929,7 +929,7 @@ def test_invalid_provider_fails(monkeypatch):
     """Invalid GHOST_PROVIDER raises RuntimeError"""
     from services.orchestrator.app.main import init_globals
     monkeypatch.setenv("GHOST_PROVIDER", "invalid_provider")
-    with pytest.raises(RuntimeError, match="GHOST_PROVIDER must be 'mock' or 'vertex'"):
+    with pytest.raises(RuntimeError, match="GHOST_PROVIDER must be 'mock', 'vertex', or 'adk'"):
         init_globals()
 
 

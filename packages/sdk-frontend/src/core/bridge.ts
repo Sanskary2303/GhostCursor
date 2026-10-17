@@ -12,6 +12,8 @@ export interface WidgetBridgeState {
   outcome: DockOutcome;
   /** Move the widget to the other side so it doesn't cover the current target. */
   flipSide: boolean;
+  /** Results and elapsed duration of the last execution for cards. */
+  lastRun: { results: { ok: boolean; error?: string }[]; ms: number } | null;
 }
 
 export const INITIAL_WIDGET_STATE: WidgetBridgeState = {
@@ -20,6 +22,7 @@ export const INITIAL_WIDGET_STATE: WidgetBridgeState = {
   step: null,
   outcome: 'none',
   flipSide: false,
+  lastRun: null,
 };
 
 export interface Bridge<T> {

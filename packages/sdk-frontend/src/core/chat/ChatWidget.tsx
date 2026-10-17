@@ -14,6 +14,19 @@ import type { Action } from '../types';
 import { INITIAL_WIDGET_STATE } from '../bridge';
 import type { Bridge, WidgetBridgeState } from '../bridge';
 
+export interface RunCardStep {
+  label: string;
+  status: 'done' | 'failed' | 'skipped';
+  targetId?: string;
+  error?: string;
+}
+
+export interface RunCard {
+  kind: 'receipt' | 'recovery';
+  steps: RunCardStep[];
+  seconds: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -22,6 +35,7 @@ export interface Message {
   actions?: any[];
   questions?: { question: string; options: string[] }[];
   isStreaming?: boolean;
+  card?: RunCard;
 }
 
 export interface ChatWidgetProps {
@@ -38,6 +52,7 @@ export interface ChatWidgetProps {
   onActionApproval: (actions: any[], token?: string) => Promise<any>;
   onCancelApproval?: () => Promise<any>;
   onStop?: () => void;
+  onShowMe?: (steps: { targetId: string; label: string }[]) => void;
   initialContext: any;
 }
 
@@ -76,6 +91,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private inputRef = createRef<HTMLTextAreaElement>();
   private abortController: AbortController | null = null;
   private isStoppedByUser = false;
+  private lastRequest = '';
   private unsubscribeBridge: (() => void) | null = null;
   private tokens: ThemeTokens = tokensFor(
     resolveMode(this.props.theme.mode, prefersDarkScheme()),
@@ -156,10 +172,16 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     return newMessage;
   };
 
-  private applyResponse = (messageId: string, response: any) => {
+  private applyResponse = (messageId: string, response: any, card?: RunCard | null) => {
     this.setState(prev => ({
       messages: prev.messages.map(m => m.id === messageId
-        ? { ...m, content: response.reply, isStreaming: false, questions: response.questions?.length ? response.questions : undefined }
+        ? {
+            ...m,
+            content: response.reply,
+            isStreaming: false,
+            questions: response.questions?.length ? response.questions : undefined,
+            ...(card ? { card } : {}),
+          }
         : m),
     }));
     if (response.actions?.length) {
@@ -178,15 +200,16 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     }
   };
 
-  private handleSendMessage = async (e: Event) => {
-    e.preventDefault();
+  private handleSendMessage = async (e?: Event, textOverride?: string) => {
+    e?.preventDefault();
     const { inputValue, isLoading, isExecutingActions } = this.state;
-    if (!inputValue.trim() || isLoading || isExecutingActions) return;
+    const message = (textOverride ?? inputValue).trim();
+    if (!message || isLoading || isExecutingActions) return;
     this.props.bridge?.set({ outcome: 'none' });
 
     this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
-    const message = inputValue.trim();
+    this.lastRequest = message;
     this.setState({ inputValue: '', isLoading: true });
 
     // Add user message
@@ -218,7 +241,41 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.props.onStop?.();
   };
 
+  private buildRunCard(actions: Action[]): RunCard | null {
+    const run = this.props.bridge?.get().lastRun;
+    if (!run || run.results.length === 0) return null;
+    const failedIndex = run.results.findIndex(r => !r.ok);
+    const steps: RunCardStep[] = actions.map((action, i) => {
+      const result = run.results[i];
+      const status: RunCardStep['status'] = !result ? 'skipped' : result.ok ? 'done' : i === failedIndex ? 'failed' : 'skipped';
+      return {
+        label: describeAction(action),
+        status,
+        targetId: action.target_id,
+        error: result && !result.ok ? result.error : undefined,
+      };
+    });
+    return { kind: failedIndex === -1 ? 'receipt' : 'recovery', steps, seconds: Math.round(run.ms / 100) / 10 };
+  }
+
+  private attachCard(messageId: string, card: RunCard) {
+    this.setState(prev => ({ messages: prev.messages.map(m => (m.id === messageId ? { ...m, card } : m)) }));
+  }
+
+  private retryLastRequest = () => {
+    if (!this.lastRequest || this.state.isLoading || this.state.isExecutingActions) return;
+    void this.handleSendMessage(undefined, this.lastRequest);
+  };
+
+  private showMeWhere = (card: RunCard) => {
+    const steps = card.steps
+      .filter(s => Boolean(s.targetId))
+      .map(s => ({ targetId: s.targetId as string, label: s.label }));
+    if (steps.length) this.props.onShowMe?.(steps);
+  };
+
   private executeActions = async (actions: any[], token?: string) => {
+    this.props.bridge?.set({ lastRun: null });
     this.isStoppedByUser = false;
     this.setState({ isLoading: true, isExecutingActions: true });
     const statusMsg = this.addMessage({ role: 'assistant', content: 'Running the approved steps...', isStreaming: true });
@@ -231,7 +288,8 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             : m),
         }));
       } else if (response) {
-        this.applyResponse(statusMsg.id, response);
+        const card = this.buildRunCard(actions);
+        this.applyResponse(statusMsg.id, response, card);
       }
     } catch (error) {
       if (this.isStoppedByUser) {
@@ -243,9 +301,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       } else {
         const text = error instanceof Error ? error.message : 'Unknown error';
         const displayContent = text.includes('out of date') ? 'This plan is out of date.' : `Error: ${text}`;
+        const card = this.buildRunCard(actions);
         this.setState(prev => ({
           messages: prev.messages.map(m => m.id === statusMsg.id
-            ? { ...m, content: displayContent, isStreaming: false }
+            ? { ...m, content: displayContent, isStreaming: false, ...(card ? { card } : {}) }
             : m),
         }));
       }
@@ -454,6 +513,8 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                     message={message}
                     theme={theme}
                     onOptionSelect={this.handleOptionSelect}
+                    onRetry={this.retryLastRequest}
+                    onShowMe={this.showMeWhere}
                   />
                 ))
               )}
@@ -547,11 +608,17 @@ interface MessageBubbleProps {
   message: Message;
   theme?: ChatWidgetProps['theme'];
   onOptionSelect: (option: string) => void;
+  onRetry?: () => void;
+  onShowMe?: (card: RunCard) => void;
 }
 
-const MessageBubble = ({ message, onOptionSelect }: MessageBubbleProps) => {
+const MessageBubble = ({ message, onOptionSelect, onRetry, onShowMe }: MessageBubbleProps) => {
   const isUser = message.role === 'user';
   const showTyping = !isUser && message.isStreaming && !message.content;
+  const card = message.card;
+  const failedStepIndex = card ? card.steps.findIndex(s => s.status === 'failed') : -1;
+  const hasTargets = card ? card.steps.some(s => Boolean(s.targetId)) : false;
+
   return (
     <div className={`gc-msg ${isUser ? 'gc-msg--user' : 'gc-msg--assistant'}`}>
       <div className="gc-bubble">
@@ -561,6 +628,41 @@ const MessageBubble = ({ message, onOptionSelect }: MessageBubbleProps) => {
             {message.questions.flatMap(q => q.options.map(opt => (
               <button key={opt} type="button" className="gc-option" onClick={() => onOptionSelect(opt)}>{opt}</button>
             )))}
+          </div>
+        )}
+        {card && (
+          <div className={`gc-card ${card.kind === 'receipt' ? 'gc-card--receipt' : 'gc-card--recovery'}`}>
+            <div className="gc-card-head">
+              <span className="gc-card-title">
+                {card.kind === 'receipt' ? 'RECEIPT' : failedStepIndex !== -1 ? `FAILED AT STEP ${failedStepIndex + 1}` : 'FAILED'}
+              </span>
+              <span className="gc-card-ms">{card.seconds} s</span>
+            </div>
+            <ul className="gc-card-list gc-card-steps">
+              {card.steps.map((step, idx) => (
+                <li key={idx} className={`gc-card-step gc-card-step--${step.status}`}>
+                  <span className="gc-card-mark" aria-hidden="true">
+                    {step.status === 'done' ? '✓' : step.status === 'failed' ? '✕' : '–'}
+                  </span>
+                  <div className="gc-card-text">
+                    <div>{step.label}</div>
+                    {step.error && <div className="gc-card-why">{step.error}</div>}
+                  </div>
+                </li>
+              ))}
+            </ul>
+            {card.kind === 'recovery' && (
+              <div className="gc-card-actions">
+                <button type="button" className="gc-btn gc-btn--primary" onClick={onRetry}>
+                  Try again
+                </button>
+                {hasTargets && onShowMe && (
+                  <button type="button" className="gc-btn gc-btn--ghost" onClick={() => onShowMe(card)}>
+                    Show me where
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

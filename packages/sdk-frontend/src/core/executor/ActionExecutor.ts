@@ -43,7 +43,7 @@ export interface ExecutionResult {
 }
 
 const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
-  timeout: 5000,
+  timeout: 8000,
   requireApproval: true,
   onProgress: () => {},
   onCursorMove: () => {},
@@ -475,7 +475,7 @@ async function executeAskClarification(question: string, options: string[], _opt
 /**
  * Waits for SPA navigation to complete
  */
-async function waitForNavigation(expectedPath: string, timeoutMs = 3000): Promise<boolean> {
+async function waitForNavigation(expectedPath: string, timeoutMs = 8000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (window.location.pathname === expectedPath) {

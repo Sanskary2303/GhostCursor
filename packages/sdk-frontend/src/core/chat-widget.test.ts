@@ -129,5 +129,88 @@ describe('ChatWidget shell', () => {
     expect(root.querySelector('.ghost-chat-panel.gc-mission')).toBeNull();
     expect(root.querySelector('[role="log"]')).not.toBeNull();
   });
+
+  it('renders recovery card with duration and allows retry on action failure', async () => {
+    const bridge = createBridge({ ...INITIAL_WIDGET_STATE });
+    let sendCount = 0;
+    let showedSteps: any = null;
+    const { root } = mount({
+      onSendMessage: async () => {
+        sendCount++;
+        return {
+          reply: 'Plan',
+          status: 'awaiting_actions',
+          runId: 'r',
+          revision: 0,
+          actions: [
+            { id: 'a1', type: 'click', target_id: 'cart.btn', explanation: 'Add to cart' },
+          ],
+        };
+      },
+      onActionApproval: async () => {
+        bridge.set({
+          lastRun: {
+            results: [{ ok: false, error: 'Element disabled' }],
+            ms: 2400,
+          },
+        });
+        return {
+          reply: 'Step 1 of 1 couldn\'t finish: "Element disabled". Steps done before it were kept.',
+          status: 'failed',
+          runId: 'r',
+          revision: 1,
+        };
+      },
+      onShowMe: (steps) => {
+        showedSteps = steps;
+      },
+    }, bridge);
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const textarea = root.querySelector('textarea.gc-input') as HTMLTextAreaElement;
+    textarea.value = 'Add to cart';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    const form = root.querySelector('form.gc-composer') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    await tick();
+    await tick();
+    await tick();
+
+    const approveBtn = root.querySelector('.gc-plan .gc-btn--primary') as HTMLButtonElement;
+    expect(approveBtn).not.toBeNull();
+    approveBtn.click();
+
+    await tick();
+    await tick();
+    await tick();
+
+    const card = root.querySelector('.gc-card--recovery')!;
+    expect(card).not.toBeNull();
+    expect(card.textContent).toContain('FAILED AT STEP 1');
+    expect(card.textContent).toContain('2.4 s');
+    expect(card.textContent).toContain('✕');
+    expect(card.textContent).toContain('Element disabled');
+
+    const showMeBtn = card.querySelector('button.gc-btn--ghost') as HTMLButtonElement;
+    expect(showMeBtn).not.toBeNull();
+    expect(showMeBtn.textContent).toContain('Show me where');
+    showMeBtn.click();
+    expect(showedSteps).toEqual([{ targetId: 'cart.btn', label: 'Click button' }]);
+
+    const tryAgainBtn = card.querySelector('button.gc-btn--primary') as HTMLButtonElement;
+    expect(tryAgainBtn).not.toBeNull();
+    expect(tryAgainBtn.textContent).toContain('Try again');
+
+    expect(sendCount).toBe(1);
+    tryAgainBtn.click();
+    await tick();
+    await tick();
+    expect(sendCount).toBe(2);
+  });
 });
 

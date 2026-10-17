@@ -83,6 +83,21 @@ export const WIDGET_CSS = `
 .gc-mission-progress { height: 4px; border-radius: 2px; background: var(--gc-surface-2); overflow: hidden; }
 .gc-mission-progress span { display: block; height: 100%; background: var(--gc-accent); transition: width .3s ease; }
 .gc-mission .gc-stop { height: 36px; padding: 0 12px; }
+.gc-card { margin-top: 10px; border: 1px solid var(--gc-border); border-radius: 12px; background: var(--gc-surface); overflow: hidden; white-space: normal; }
+.gc-card--recovery { border-color: rgba(239, 68, 68, .45); }
+.gc-card-head { display: flex; justify-content: space-between; padding: 8px 12px; font-size: 10.5px; font-weight: 800; letter-spacing: .14em; color: var(--gc-muted); border-bottom: 1px dashed var(--gc-accent-line); }
+.gc-card--receipt .gc-card-head span:first-child { color: var(--gc-success); }
+.gc-card--recovery .gc-card-head span:first-child { color: var(--gc-danger); }
+.gc-card-list { list-style: none; margin: 0; padding: 6px 0; }
+.gc-card-step { display: flex; gap: 8px; align-items: baseline; padding: 4px 12px; font-size: 12.5px; }
+.gc-card-mark { width: 14px; text-align: center; font-weight: 800; }
+.gc-card-step--done .gc-card-mark { color: var(--gc-success); }
+.gc-card-step--failed { color: var(--gc-danger); }
+.gc-card-step--skipped { color: var(--gc-muted); }
+.gc-card-text { flex: 1; min-width: 0; }
+.gc-card-why { font-size: 11.5px; color: var(--gc-muted); margin-top: 2px; }
+.gc-card-actions { display: flex; gap: 8px; padding: 8px 12px 12px; }
+.gc-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 @keyframes gc-spin { to { transform: rotate(360deg); } }
 @keyframes gc-float { 0%, 100% { transform: translate(2px, 1px); } 50% { transform: translate(2px, -1px); } }
 @keyframes gc-march { to { stroke-dashoffset: -30; } }

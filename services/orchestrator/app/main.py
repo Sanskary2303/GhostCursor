@@ -675,6 +675,13 @@ async def _handle_tool_results(
     return response
 
 
+def _safe_step_error(error: Optional[str]) -> str:
+    """One printable line, at most 160 characters. The text comes from the browser."""
+    text = " ".join(str(error or "action failed").split())
+    text = "".join(ch for ch in text if ch.isprintable())
+    return text if len(text) <= 160 else text[:159] + "…"
+
+
 async def _handle_action_results(
     run_state: RunState,
     results: Optional[List[ToolCallResponse]],
@@ -683,13 +690,23 @@ async def _handle_action_results(
 ) -> HostedRunResponse:
     """Handle frontend action execution results"""
     run_state.latest_action_results = results or []
-    if any(not r.ok for r in (results or [])):
+    all_results = list(results or [])
+    failed = [(i, r) for i, r in enumerate(all_results) if not r.ok]
+    if failed:
+        index, first = failed[0]
+        if all((r.error or "") == "cancelled by user" for _, r in failed):
+            reply = "Stopped. Steps already done were kept."
+        else:
+            reply = (
+                f"Step {index + 1} of {len(all_results)} couldn't finish: "
+                f'"{_safe_step_error(first.error)}". Steps done before it were kept.'
+            )
         return HostedRunResponse(
             protocolVersion="1",
             runId=run_state.id,
             revision=run_state.revision,
             status="failed",
-            reply="Stopped because a step failed. Changes already made on the page were kept.",
+            reply=reply,
         )
 
     # Map result IDs to action names from previous actions in history

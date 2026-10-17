@@ -441,7 +441,91 @@ async def test_actions_continuation_with_failure_returns_failed(auth_headers):
         assert cont_res.status_code == 200
         cont_data = cont_res.json()
         assert cont_data["status"] == "failed"
-        assert cont_data["reply"] == "Stopped because a step failed. Changes already made on the page were kept."
+        assert cont_data["reply"] == 'Step 2 of 2 couldn\'t finish: "Switch element disabled". Steps done before it were kept.'
+
+
+@pytest.mark.asyncio
+async def test_actions_continuation_with_cancellation_returns_stopped(auth_headers):
+    """Test that when all failed results are cancelled by user, reply indicates Stopped"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode please",
+        "context": {"page": "home", "values": {}, "availableTargets": ["theme.toggle"]},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        run_id = data["runId"]
+        actions = data["actions"]
+
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": str(uuid.uuid4()),
+            "revision": 0,
+            "kind": "actions",
+            "results": [
+                {"id": actions[0]["id"], "ok": True, "output": {}},
+                {"id": actions[1]["id"], "ok": False, "error": "cancelled by user"},
+            ],
+        }
+
+        cont_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json=continue_payload,
+            headers=auth_headers,
+        )
+        assert cont_res.status_code == 200
+        cont_data = cont_res.json()
+        assert cont_data["status"] == "failed"
+        assert cont_data["reply"] == "Stopped. Steps already done were kept."
+
+
+@pytest.mark.asyncio
+async def test_actions_continuation_sanitizes_and_truncates_error(auth_headers):
+    """Test that non-printable chars are stripped, whitespace normalized, and error truncated"""
+    payload = {
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Turn on dark mode please",
+        "context": {"page": "home", "values": {}, "availableTargets": ["theme.toggle"]},
+    }
+
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.post("/v1/runs", json=payload, headers=auth_headers)
+        assert res.status_code == 200
+        data = res.json()
+        run_id = data["runId"]
+        actions = data["actions"]
+
+        dirty_error = "bad\nthing\x07 " + "x" * 400
+        continue_payload = {
+            "protocolVersion": "1",
+            "eventId": str(uuid.uuid4()),
+            "revision": 0,
+            "kind": "actions",
+            "results": [
+                {"id": actions[0]["id"], "ok": True, "output": {}},
+                {"id": actions[1]["id"], "ok": False, "error": dirty_error},
+            ],
+        }
+
+        cont_res = await client.post(
+            f"/v1/runs/{run_id}/continue",
+            json=continue_payload,
+            headers=auth_headers,
+        )
+        assert cont_res.status_code == 200
+        cont_data = cont_res.json()
+        assert cont_data["status"] == "failed"
+        assert "\n" not in cont_data["reply"]
+        assert "\x07" not in cont_data["reply"]
+        assert len(cont_data["reply"]) < 260
+        assert cont_data["reply"].startswith('Step 2 of 2 couldn\'t finish: "bad thing')
 
 
 @pytest.mark.asyncio

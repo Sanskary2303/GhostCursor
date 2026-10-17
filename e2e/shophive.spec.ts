@@ -411,6 +411,7 @@ test('cursor flies out of the dock along a curve and docks again', async ({ page
   await ask(page, 'Turn on dark mode');
   await approve(page);
   await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+  await expect(chat(page).locator('.gc-card--receipt')).toBeVisible({ timeout: 20_000 });
   await expect(page.locator('#ghost-cursor-overlay')).toHaveAttribute('data-gc-cursor-state', 'docked', { timeout: 10_000 });
 
   const samples = await cursorSamples(page);
@@ -430,6 +431,7 @@ test('mission bar keeps the target visible while the cursor acts', async ({ page
   await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
   await expect(page.locator('.ghost-chat-panel.gc-mission')).toHaveCount(0, { timeout: 10_000 });
   await expect(chat(page)).toContainText('Theme switched to Dark Mode', { timeout: 20_000 });
+  await expect(chat(page).locator('.gc-card--receipt')).toBeVisible({ timeout: 20_000 });
 
   const acting = (await cursorSamples(page)).filter(s => s.state === 'acting');
   expect(acting.length).toBeGreaterThan(0);
@@ -464,6 +466,29 @@ test('Stop during a flight sends the cursor home within 400 ms, and the next pla
   await ask(page, 'Turn on dark mode');
   await approve(page);
   await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+});
+
+test('a failed step shows a recovery card, and Try again makes a new plan', async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto('/product/air-max-90');
+  await page.locator('[data-ghost-id="product.add_to_cart_btn"]').evaluate(el => el.setAttribute('aria-disabled', 'true'));
+
+  await ask(page, 'Add the Air Max 90 in size 10 to my cart');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 15_000 });
+  await approve(page);
+
+  const card = chat(page).locator('.gc-card--recovery');
+  await expect(card).toBeVisible({ timeout: 20_000 });
+  await expect(card).toContainText('FAILED AT STEP');
+  await expect(card.getByRole('button', { name: 'Try again' })).toBeVisible();
+
+  await page.locator('[data-ghost-id="product.add_to_cart_btn"]').evaluate(el => el.removeAttribute('aria-disabled'));
+  await card.getByRole('button', { name: 'Try again' }).click();
+
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 15_000 });
+  await approve(page);
+  await expect(chat(page).locator('.gc-card--receipt')).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByRole('link', { name: 'Cart (1)' })).toBeVisible({ timeout: 20_000 });
 });
 
 test.describe('reduced motion', () => {

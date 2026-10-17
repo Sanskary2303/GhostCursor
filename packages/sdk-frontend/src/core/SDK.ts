@@ -109,7 +109,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
 
   let activeRing: RingHandle | null = null;
   const actionExecutor = new ActionExecutor({
-    timeout: 5000,
+    timeout: 8000,
     requireApproval: requireApprovalForActions,
     allowSemanticLookup,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
@@ -268,6 +268,9 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         actionExecutor.stop();
         cursor.cancel();
       },
+      onShowMe: (steps: { targetId: string; label: string }[]) => {
+        void startTour(steps.map(s => ({ target_id: s.targetId, message: `Here: ${s.label}`, spotlight: true })));
+      },
     }),
     shadowRoot
   );
@@ -363,16 +366,29 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   }
 
   async function runWithCursor(actions: Action[]): Promise<ExecutionResult> {
+    const startedAt = Date.now();
     await nextFrame(); // let the widget collapse into the mission bar first
     await cursor.undock();
     let execution: ExecutionResult;
     try {
       execution = await actionExecutor.execute(actions);
     } catch (error) {
+      widgetBridge.set({
+        lastRun: {
+          results: [{ ok: false, error: error instanceof Error ? error.message : String(error) }],
+          ms: Date.now() - startedAt,
+        },
+      });
       void finishRun('error');
       throw error;
     }
     const outcome: CursorOutcome = execution.success ? 'success' : execution.error === 'cancelled' ? 'stopped' : 'error';
+    widgetBridge.set({
+      lastRun: {
+        results: execution.results.map(r => ({ ok: r.ok, error: r.error })),
+        ms: Date.now() - startedAt,
+      },
+    });
     void finishRun(outcome);
     return execution;
   }

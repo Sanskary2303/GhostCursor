@@ -64,12 +64,15 @@ export const WIDGET_CSS = `
 .gc-plan-icon { line-height: 22px; text-align: center; color: var(--gc-accent); font-size: 14px; }
 .gc-plan-text { font-size: 13px; font-weight: 600; line-height: 22px; }
 .gc-plan-why { font-size: 12px; color: var(--gc-muted); line-height: 1.4; }
+.gc-plan-toggle-row { display: flex; align-items: center; justify-content: flex-end; padding: 0 14px 4px; }
+.gc-plan-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--gc-muted); cursor: pointer; user-select: none; }
+.gc-plan-toggle input { accent-color: var(--gc-accent); cursor: pointer; }
 .gc-plan-actions { display: flex; gap: 8px; padding: 10px 14px 14px; }
 .gc-btn { flex: 1; padding: 10px 14px; border-radius: 10px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
 .gc-btn--ghost { background: transparent; color: var(--gc-text); border: 1px solid var(--gc-border); }
 .gc-btn--ghost:hover { border-color: var(--gc-muted); }
 .gc-btn--primary { background: var(--gc-accent); color: #fff; border: 0; box-shadow: 0 6px 16px var(--gc-accent-soft); }
-.gc-btn:focus-visible, .gc-option:focus-visible, .gc-send:focus-visible, .gc-stop:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 2px; }
+.gc-btn:focus-visible, .gc-option:focus-visible, .gc-send:focus-visible, .gc-stop:focus-visible, .gc-next-step:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 2px; }
 .gc-dock[data-outcome="success"]::after, .gc-launcher[data-outcome="success"] .gc-launcher-ring { border-style: solid; border-color: var(--gc-success); animation: gc-flash 1.2s ease-out 1; }
 .gc-dock[data-outcome="error"]::before, .gc-launcher[data-outcome="error"]::after { content: ""; position: absolute; top: -1px; right: -1px; width: 10px; height: 10px; border-radius: 50%; background: var(--gc-danger); border: 2px solid var(--gc-surface); z-index: 1; }
 .gc-dock[data-outcome="success"] .gc-dock-cursor, .gc-dock[data-outcome="error"] .gc-dock-cursor, .gc-dock[data-outcome="stopped"] .gc-dock-cursor { animation: gc-land .45s cubic-bezier(.34, 1.56, .64, 1) 1; }
@@ -83,6 +86,15 @@ export const WIDGET_CSS = `
 .gc-mission-progress { height: 4px; border-radius: 2px; background: var(--gc-surface-2); overflow: hidden; }
 .gc-mission-progress span { display: block; height: 100%; background: var(--gc-accent); transition: width .3s ease; }
 .gc-mission .gc-stop { height: 36px; padding: 0 12px; }
+.gc-mission .gc-next-step { height: 36px; padding: 0 14px; font: inherit; font-size: 13px; font-weight: 700; background: var(--gc-accent); color: #fff; border: 0; border-radius: 8px; cursor: pointer; white-space: nowrap; }
+.gc-mission .gc-next-step:hover { filter: brightness(1.1); }
+.gc-ask-bubble { position: fixed; z-index: 2147483640; display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 20px; background: var(--gc-surface); color: var(--gc-text); border: 1px solid var(--gc-border); box-shadow: 0 4px 16px rgba(0, 0, 0, 0.22); font: inherit; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; transition: transform .15s ease, box-shadow .15s ease; animation: gc-pop .18s ease-out; }
+.gc-ask-bubble:hover { transform: translateY(-1px); border-color: var(--gc-accent); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.28); }
+.gc-slash-menu { position: absolute; bottom: calc(100% + 6px); left: 12px; right: 12px; background: var(--gc-surface); border: 1px solid var(--gc-border); border-radius: 12px; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2); overflow: hidden; z-index: 10; }
+.gc-slash-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12px; cursor: pointer; color: var(--gc-text); }
+.gc-slash-item:hover { background: var(--gc-surface-2); color: var(--gc-accent); }
+.gc-slash-cmd { font-weight: 700; color: var(--gc-accent); }
+.gc-slash-desc { font-size: 11px; color: var(--gc-muted); }
 .gc-card { margin-top: 10px; border: 1px solid var(--gc-border); border-radius: 12px; background: var(--gc-surface); overflow: hidden; white-space: normal; }
 .gc-card--recovery { border-color: rgba(239, 68, 68, .45); }
 .gc-card-head { display: flex; justify-content: space-between; padding: 8px 12px; font-size: 10.5px; font-weight: 800; letter-spacing: .14em; color: var(--gc-muted); border-bottom: 1px dashed var(--gc-accent-line); }

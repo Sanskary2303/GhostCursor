@@ -43,7 +43,7 @@ export interface GhostCursorSDK {
   readonly host?: HTMLElement;
   dispose(): void;
   sendMessage(message: string): Promise<void>;
-  executeActions(actions: Action[], token?: string): Promise<PublicResponse | null>;
+  executeActions(actions: Action[], token?: string, stepByStep?: boolean): Promise<PublicResponse | null>;
   startTour(steps: any[]): Promise<void>;
   updateContext(context: Partial<PageContext>): void;
   getContext(): PageContext | null;
@@ -141,6 +141,34 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     requireApproval: requireApprovalForActions,
     allowSemanticLookup,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
+    onStepApproval: async (_element, info) => {
+      cursor.setCaption('Approve this step?');
+      return new Promise<boolean>((resolve) => {
+        let settled = false;
+        const cleanUp = () => {
+          widgetBridge.set({ awaitingNextStep: false, onNextStep: null });
+          info.signal.removeEventListener('abort', onAbort);
+        };
+        const onAbort = () => {
+          if (settled) return;
+          settled = true;
+          cleanUp();
+          resolve(false);
+        };
+        const onNext = () => {
+          if (settled) return;
+          settled = true;
+          cleanUp();
+          cursor.setCaption(`${info.index + 1}/${info.total} • ${describeAction(info.action)}`);
+          resolve(true);
+        };
+        info.signal.addEventListener('abort', onAbort);
+        widgetBridge.set({
+          awaitingNextStep: true,
+          onNextStep: onNext,
+        });
+      });
+    },
     onAim: async (element, info) => {
       await keepTargetVisible(element);
       activeRing?.remove();
@@ -253,6 +281,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     activeRing?.remove();
     activeRing = null;
     cursor.setCaption(null);
+    widgetBridge.set({ awaitingNextStep: false, onNextStep: null });
     if (widgetBridge.get().flipSide) {
       widgetBridge.set({ flipSide: false });
       await nextFrame();
@@ -324,7 +353,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         rememberStatus(res);
         return res;
       },
-      onActionApproval: (actions: any[], token?: string) => executeActions(actions, token),
+      onActionApproval: (actions: any[], token?: string, stepByStep?: boolean) => executeActions(actions, token, stepByStep),
       onCancelApproval: async () => {
         if (!currentRunId) return null;
         const res = await transportManager.continue('cancel', {});
@@ -425,24 +454,24 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   /**
    * Execute approved actions
    */
-  async function executeActions(actions: Action[], token?: string): Promise<PublicResponse | null> {
+  async function executeActions(actions: Action[], token?: string, stepByStep = false): Promise<PublicResponse | null> {
     const currentToken = `${transportManager.getRunId()}:${transportManager.getRevision()}`;
     if (isDisposed || !currentRunId || lastStatus !== 'awaiting_actions' || (token && token !== currentToken)) {
       throw new Error('This plan is out of date.');
     }
-    const execution = await runWithCursor(actions);
+    const execution = await runWithCursor(actions, stepByStep);
     const res = await transportManager.continue('actions', { results: execution.results });
     rememberStatus(res);
     return res;
   }
 
-  async function runWithCursor(actions: Action[]): Promise<ExecutionResult> {
+  async function runWithCursor(actions: Action[], stepByStep = false): Promise<ExecutionResult> {
     const startedAt = Date.now();
     await nextFrame(); // let the widget collapse into the mission bar first
     await cursor.undock();
     let execution: ExecutionResult;
     try {
-      execution = await actionExecutor.execute(actions);
+      execution = await actionExecutor.execute(actions, { stepByStep });
     } catch (error) {
       widgetBridge.set({
         lastRun: {

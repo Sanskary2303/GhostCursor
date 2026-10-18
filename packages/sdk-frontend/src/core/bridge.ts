@@ -14,6 +14,10 @@ export interface WidgetBridgeState {
   flipSide: boolean;
   /** Results and elapsed duration of the last execution for cards. */
   lastRun: { results: { ok: boolean; error?: string }[]; ms: number } | null;
+  /** Whether the executor is paused awaiting user click on 'Next step' in step-by-step mode. */
+  awaitingNextStep?: boolean;
+  /** Callback fired when user clicks 'Next step' in the mission bar. */
+  onNextStep?: (() => void) | null;
 }
 
 export const INITIAL_WIDGET_STATE: WidgetBridgeState = {
@@ -23,6 +27,8 @@ export const INITIAL_WIDGET_STATE: WidgetBridgeState = {
   outcome: 'none',
   flipSide: false,
   lastRun: null,
+  awaitingNextStep: false,
+  onNextStep: null,
 };
 
 export interface Bridge<T> {

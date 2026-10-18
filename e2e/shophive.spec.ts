@@ -566,6 +566,43 @@ test('chat history drawer and re-hydration on reload', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Approve and Run' })).not.toBeVisible();
 });
 
+test('step-by-step mode: the toggle does not change until Next step is pressed', async ({ page }) => {
+  await page.goto('/');
+
+  await ask(page, 'Turn on dark mode');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 20_000 });
+
+  const stepToggle = page.getByRole('checkbox', { name: 'Step by step' });
+  await expect(stepToggle).toBeVisible();
+  await stepToggle.check();
+  await expect(stepToggle).toBeChecked();
+
+  await approve(page);
+
+  const nextStepBtn = page.getByRole('button', { name: 'Next step' });
+
+  // Step 1: Navigate to settings
+  await expect(nextStepBtn).toBeVisible({ timeout: 20_000 });
+  await nextStepBtn.click();
+
+  // Step 2: Arrives at settings, pauses at theme.toggle
+  await expect(page).toHaveURL(/\/settings$/, { timeout: 20_000 });
+  const themeToggle = page.locator('[data-ghost-id="theme.toggle"]');
+  await expect(themeToggle).toBeVisible({ timeout: 20_000 });
+  await expect(nextStepBtn).toBeVisible({ timeout: 20_000 });
+
+  // While awaiting approval for Step 2, the toggle has NOT changed
+  await expect(themeToggle).not.toBeChecked();
+  await expect(page.locator('html')).not.toHaveClass(/dark/);
+
+  // Press Next step to perform the DOM change
+  await nextStepBtn.click();
+
+  // Now the action executes and dark mode is active
+  await expect(themeToggle).toBeChecked({ timeout: 20_000 });
+  await expect(page.locator('html')).toHaveClass(/dark/);
+});
+
 test.describe('reduced motion', () => {
   test.use({ reducedMotion: 'reduce' as any, contextOptions: { reducedMotion: 'reduce' } });
 

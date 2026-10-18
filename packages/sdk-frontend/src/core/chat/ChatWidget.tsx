@@ -58,10 +58,11 @@ export interface ChatWidgetProps {
   bridge?: Bridge<WidgetBridgeState>;
   requireApprovalForActions: boolean;
   onSendMessage: (message: string, context: any) => Promise<any>;
-  onActionApproval: (actions: any[], token?: string) => Promise<any>;
+  onActionApproval: (actions: any[], token?: string, stepByStep?: boolean) => Promise<any>;
   onCancelApproval?: () => Promise<any>;
   onStop?: () => void;
   onShowMe?: (steps: { targetId: string; label: string }[]) => void;
+  onTour?: () => Promise<void> | void;
   history?: HistoryProp;
   initialContext: any;
 }
@@ -83,6 +84,8 @@ export interface ChatWidgetState {
   sessions: SessionSummary[];
   query: string;
   hasRehydrated?: boolean;
+  askBubble: { text: string; top: number; left: number } | null;
+  showSlashMenu: boolean;
 }
 
 function formatRelativeTime(dateStr?: string): string {
@@ -119,6 +122,8 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     sessions: [] as SessionSummary[],
     query: '',
     hasRehydrated: false,
+    askBubble: null,
+    showSlashMenu: false,
   };
 
   private messagesEndRef = createRef<HTMLDivElement>();
@@ -137,6 +142,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     this.scrollToBottom();
     this.setupResizeListener();
     window.addEventListener('keydown', this.handleKeyDown);
+    if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+      document.addEventListener('selectionchange', this.handleSelectionChange);
+      document.addEventListener('mousedown', this.handleDocumentMouseDown);
+    }
     this.unsubscribeBridge = this.props.bridge?.subscribe(ui => this.setState({ ui })) ?? null;
     if (this.props.history) {
       const storedId = this.props.history.current();
@@ -170,6 +179,21 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   };
 
   private handleKeyDown = (e: KeyboardEvent) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+      const active = typeof document !== 'undefined' ? document.activeElement : null;
+      if (active && (active.tagName === 'INPUT' || active.tagName === 'TEXTAREA' || (active as HTMLElement).isContentEditable)) {
+        const host = typeof document !== 'undefined' ? document.getElementById('ghost-cursor-widget-container') : null;
+        if (host && !host.contains(active)) {
+          return;
+        }
+      }
+      e.preventDefault();
+      this.setState({ isOpen: true }, () => {
+        setTimeout(() => this.inputRef.current?.focus(), 50);
+      });
+      return;
+    }
+
     if (e.key !== 'Escape') return;
     if (this.state.drawerOpen) {
       this.setState({ drawerOpen: false, query: '' });
@@ -180,11 +204,79 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     }
   };
 
-  private toggleDrawer = async () => {
-    if (this.state.drawerOpen) {
-      this.setState({ drawerOpen: false, query: '' });
+  private handleDocumentMouseDown = (e: MouseEvent) => {
+    if (this.state.askBubble) {
+      const path = typeof e.composedPath === 'function' ? e.composedPath() : [e.target];
+      const onBubble = path.some(el => (el instanceof HTMLElement) && (el.classList.contains('gc-ask-bubble') || el.closest?.('.gc-ask-bubble')));
+      if (!onBubble) {
+        this.setState({ askBubble: null });
+      }
+    }
+  };
+
+  private handleSelectionChange = () => {
+    if (typeof window === 'undefined') return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
       return;
     }
+    const text = selection.toString().trim();
+    if (!text || selection.rangeCount === 0) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    const container = range.commonAncestorContainer;
+    const el = container.nodeType === Node.ELEMENT_NODE ? (container as Element) : container.parentElement;
+    if (!el) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
+      return;
+    }
+    // 1. Not inside inputs, textareas, selects, or contenteditable
+    if (el.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]')) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
+      return;
+    }
+    // 2. Not inside the widget or overlays
+    if (el.closest('#ghost-cursor-widget-container, ghost-cursor-widget, #ghost-cursor-overlay, #ghost-cursor-rings')) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
+      return;
+    }
+    // 3. Not inside sensitive containers
+    if (el.closest('[data-sensitive], [data-pii], .sensitive-data, #credit-card-form, [autocomplete*="password"], [autocomplete="cc-*"]')) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
+      return;
+    }
+    const rect = typeof range.getBoundingClientRect === 'function' ? range.getBoundingClientRect() : null;
+    if (!rect || (rect.width === 0 && rect.height === 0)) {
+      if (this.state.askBubble) this.setState({ askBubble: null });
+      return;
+    }
+    const top = rect.top >= 44 ? rect.top - 38 : rect.bottom + 8;
+    const left = Math.max(10, Math.min(window.innerWidth - 130, rect.left + rect.width / 2 - 45));
+    this.setState({
+      askBubble: { text, top, left },
+    });
+  };
+
+  private handleAskBubbleClick = (e: MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!this.state.askBubble) return;
+    const raw = this.state.askBubble.text;
+    const snippet = raw.length > 200 ? raw.slice(0, 200) : raw;
+    const prefilled = `Explain: "${snippet}"`;
+    this.setState({
+      isOpen: true,
+      inputValue: prefilled,
+      askBubble: null,
+    }, () => {
+      setTimeout(() => this.inputRef.current?.focus(), 50);
+    });
+  };
+
+  private openDrawer = async () => {
     this.setState({ drawerOpen: true, query: '' });
     if (this.props.history) {
       try {
@@ -194,6 +286,14 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
         console.warn('[GhostCursor] Failed to list sessions:', err);
       }
     }
+  };
+
+  private toggleDrawer = async () => {
+    if (this.state.drawerOpen) {
+      this.setState({ drawerOpen: false, query: '' });
+      return;
+    }
+    await this.openDrawer();
   };
 
   private handleNewChat = () => {
@@ -251,6 +351,10 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   private cleanup() {
     window.removeEventListener('resize', this.handleResize);
     window.removeEventListener('keydown', this.handleKeyDown);
+    if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+      document.removeEventListener('selectionchange', this.handleSelectionChange);
+      document.removeEventListener('mousedown', this.handleDocumentMouseDown);
+    }
     this.unsubscribeBridge?.();
     this.unsubscribeBridge = null;
     if (this.abortController) {
@@ -315,9 +419,32 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     const { inputValue, isLoading, isExecutingActions } = this.state;
     const message = (textOverride ?? inputValue).trim();
     if (!message || isLoading || isExecutingActions) return;
+
+    if (message === '/new') {
+      this.setState({ inputValue: '', showSlashMenu: false });
+      this.handleNewChat();
+      return;
+    }
+
+    if (message === '/history') {
+      this.setState({ inputValue: '', showSlashMenu: false });
+      void this.openDrawer();
+      return;
+    }
+
+    if (message === '/tour') {
+      this.setState({ inputValue: '', showSlashMenu: false });
+      if (this.props.onTour) {
+        void this.props.onTour();
+      } else {
+        void this.handleSendMessage(undefined, 'Take me on a tour');
+      }
+      return;
+    }
+
     this.props.bridge?.set({ outcome: 'none' });
 
-    this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
+    this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null, showSlashMenu: false });
 
     this.lastRequest = message;
     this.setState({ inputValue: '', isLoading: true, error: null });
@@ -387,13 +514,13 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     if (steps.length) this.props.onShowMe?.(steps);
   };
 
-  private executeActions = async (actions: any[], token?: string) => {
+  private executeActions = async (actions: any[], token?: string, stepByStep?: boolean) => {
     this.props.bridge?.set({ lastRun: null });
     this.isStoppedByUser = false;
     this.setState({ isLoading: true, isExecutingActions: true });
     const statusMsg = this.addMessage({ role: 'assistant', content: 'Running the approved steps...', isStreaming: true });
     try {
-      const response = await this.props.onActionApproval(actions, token);
+      const response = await this.props.onActionApproval(actions, token, stepByStep);
       if (this.isStoppedByUser) {
         this.setState(prev => ({
           messages: prev.messages.map(m => m.id === statusMsg.id
@@ -427,13 +554,13 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     }
   };
 
-  private handleActionApproval = async (approved: boolean) => {
+  private handleActionApproval = async (approved: boolean, stepByStep?: boolean) => {
     const token = this.state.approvalToken;
     const actions = this.state.pendingActions;
     this.setState({ showActionApproval: false, pendingActions: [], approvalToken: null });
 
     if (approved && actions.length > 0) {
-      await this.executeActions(actions, token ?? undefined);
+      await this.executeActions(actions, token ?? undefined, stepByStep);
     } else if (!approved) {
       this.addMessage({ role: 'assistant', content: 'Plan cancelled.' });
       if (this.props.onCancelApproval) {
@@ -492,7 +619,9 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
   private handleInputChange = (e: Event) => {
     const target = e.target as HTMLTextAreaElement;
-    this.setState({ inputValue: target.value });
+    const val = target.value;
+    const showSlashMenu = val.startsWith('/') && !val.includes(' ') && val.length <= 10;
+    this.setState({ inputValue: val, showSlashMenu });
   };
 
   private dockState(): 'home' | 'away' {
@@ -601,8 +730,22 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             <div className="gc-mission-status" aria-live="polite">{ui.status || 'Getting ready…'}</div>
             <div className="gc-mission-progress" aria-hidden="true"><span style={{ width: `${pct}%` }} /></div>
           </div>
-          {isExecutingActions && (
-            <button type="button" className="gc-stop" onClick={this.handleStop} aria-label="Stop">■ Stop</button>
+          {(isExecutingActions || ui.cursorAway) && (
+            ui.awaitingNextStep ? (
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <button
+                  type="button"
+                  className="gc-next-step"
+                  onClick={() => ui.onNextStep?.()}
+                  aria-label="Next step"
+                >
+                  Next step
+                </button>
+                <button type="button" className="gc-stop" onClick={this.handleStop} aria-label="Stop">Stop</button>
+              </div>
+            ) : (
+              <button type="button" className="gc-stop" onClick={this.handleStop} aria-label="Stop">■ Stop</button>
+            )
           )}
         </div>
       </div>
@@ -733,6 +876,31 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
             {/* Input Area */}
             <form onSubmit={this.handleSendMessage} className="gc-composer">
+              {this.state.showSlashMenu && (
+                <div className="gc-slash-menu" role="menu" aria-label="Slash commands">
+                  {[
+                    { cmd: '/new', label: '/new', desc: 'Start a new conversation' },
+                    { cmd: '/history', label: '/history', desc: 'Open past conversations' },
+                    { cmd: '/tour', label: '/tour', desc: 'Start a guided tour' },
+                  ]
+                    .filter(item => item.cmd.startsWith(inputValue.toLowerCase()))
+                    .map(item => (
+                      <div
+                        key={item.cmd}
+                        className="gc-slash-item"
+                        role="menuitem"
+                        onClick={() => {
+                          this.setState({ inputValue: item.cmd, showSlashMenu: false }, () => {
+                            void this.handleSendMessage();
+                          });
+                        }}
+                      >
+                        <span className="gc-slash-cmd">{item.label}</span>
+                        <span className="gc-slash-desc">{item.desc}</span>
+                      </div>
+                    ))}
+                </div>
+              )}
               <div className="gc-input-row">
                 <textarea
                   ref={this.inputRef}
@@ -791,6 +959,22 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             <span className="gc-launcher-ring" aria-hidden="true" />
             <BrandCursor width={26} accent={this.tokens.accent} className="gc-launcher-cursor" />
             {unreadCount > 0 && <span className="gc-badge">{unreadCount}</span>}
+          </button>
+        )}
+        {this.state.askBubble && (
+          <button
+            type="button"
+            className="gc-ask-bubble"
+            style={{ top: `${this.state.askBubble.top}px`, left: `${this.state.askBubble.left}px` }}
+            onMouseDown={(e: MouseEvent) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
+            onClick={this.handleAskBubbleClick}
+            aria-label="Ask Ghost"
+          >
+            <BrandCursor width={14} accent={this.tokens.accent} />
+            <span>Ask Ghost</span>
           </button>
         )}
       </div>
@@ -866,33 +1050,59 @@ const MessageBubble = ({ message, onOptionSelect, onRetry, onShowMe }: MessageBu
 
 interface ActionApprovalPanelProps {
   actions: any[];
-  onApprove: (approved: boolean) => void;
+  onApprove: (approved: boolean, stepByStep?: boolean) => void;
   theme?: ChatWidgetProps['theme'];
 }
 
-const ActionApprovalPanel = ({ actions, onApprove }: ActionApprovalPanelProps) => (
-  <div className="gc-plan" role="group" aria-label="Proposed plan">
-    <div className="gc-plan-head">
-      <span>PLAN</span>
-      <span>{actions.length} {actions.length === 1 ? 'STEP' : 'STEPS'}</span>
-    </div>
-    <ol className="gc-plan-list">
-      {actions.map((action: Action, index: number) => (
-        <li key={action.id ?? index} className="gc-plan-step">
-          <span className="gc-plan-num">{index + 1}</span>
-          <span className="gc-plan-icon" aria-hidden="true">{ACTION_ICONS[action.type] ?? '•'}</span>
-          <div>
-            <div className="gc-plan-text">{describeAction(action)}</div>
-            {action.explanation && <div className="gc-plan-why">{action.explanation}</div>}
-          </div>
-        </li>
-      ))}
-    </ol>
-    <div className="gc-plan-actions">
-      <button type="button" className="gc-btn gc-btn--ghost" onClick={() => onApprove(false)}>Cancel</button>
-      <button type="button" className="gc-btn gc-btn--primary" onClick={() => onApprove(true)}>Approve and Run</button>
-    </div>
-  </div>
-);
+interface ActionApprovalPanelState {
+  stepByStep: boolean;
+}
+
+class ActionApprovalPanel extends Component<ActionApprovalPanelProps, ActionApprovalPanelState> {
+  state: ActionApprovalPanelState = {
+    stepByStep: false,
+  };
+
+  render() {
+    const { actions, onApprove } = this.props;
+    const { stepByStep } = this.state;
+    return (
+      <div className="gc-plan" role="group" aria-label="Proposed plan">
+        <div className="gc-plan-head">
+          <span>PLAN</span>
+          <span>{actions.length} {actions.length === 1 ? 'STEP' : 'STEPS'}</span>
+        </div>
+        <ol className="gc-plan-list">
+          {actions.map((action: Action, index: number) => (
+            <li key={action.id ?? index} className="gc-plan-step">
+              <span className="gc-plan-num">{index + 1}</span>
+              <span className="gc-plan-icon" aria-hidden="true">{ACTION_ICONS[action.type] ?? '•'}</span>
+              <div>
+                <div className="gc-plan-text">{describeAction(action)}</div>
+                {action.explanation && <div className="gc-plan-why">{action.explanation}</div>}
+              </div>
+            </li>
+          ))}
+        </ol>
+        <div className="gc-plan-toggle-row">
+          <label className="gc-plan-toggle">
+            <input
+              type="checkbox"
+              className="gc-step-by-step-toggle"
+              checked={stepByStep}
+              onChange={(e: any) => this.setState({ stepByStep: e.target.checked })}
+              aria-label="Step by step"
+            />
+            <span>Step by step</span>
+          </label>
+        </div>
+        <div className="gc-plan-actions">
+          <button type="button" className="gc-btn gc-btn--ghost" onClick={() => onApprove(false, stepByStep)}>Cancel</button>
+          <button type="button" className="gc-btn gc-btn--primary" onClick={() => onApprove(true, stepByStep)}>Approve and Run</button>
+        </div>
+      </div>
+    );
+  }
+}
 
 export { MessageBubble, ActionApprovalPanel };

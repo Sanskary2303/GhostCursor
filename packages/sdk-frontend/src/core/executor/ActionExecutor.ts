@@ -35,6 +35,10 @@ export interface ExecutionOptions {
   /** Called with true while waiting for an element or a route change, then false. */
   onWait?: (waiting: boolean, info: StepInfo) => void;
   allowSemanticLookup?: boolean;
+  /** When true, pauses at each target with onStepApproval before acting. */
+  stepByStep?: boolean;
+  /** Called and awaited before acting in stepByStep mode. Returns true to proceed, false to halt. */
+  onStepApproval?: (element: HTMLElement, info: StepInfo) => Promise<boolean> | boolean;
 }
 
 export interface ExecutionResult {
@@ -46,6 +50,8 @@ export interface ExecutionResult {
 const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   timeout: 8000,
   requireApproval: true,
+  stepByStep: false,
+  onStepApproval: async () => true,
   onProgress: () => {},
   onCursorMove: () => {},
   onAim: () => {},
@@ -100,6 +106,10 @@ function cancelledResult(): ToolResult {
 async function prepareToAct(element: HTMLElement, options: Required<ExecutionOptions>, info: StepInfo): Promise<boolean> {
   await animateCursorTo(element, options, info);
   if (info.signal.aborted) return false;
+  if (options.stepByStep && options.onStepApproval) {
+    const ok = await options.onStepApproval(element, info);
+    if (!ok || info.signal.aborted) return false;
+  }
   await options.onBeforeAct(element, info);
   return !info.signal.aborted;
 }
@@ -505,7 +515,8 @@ export class ActionExecutor {
   /**
    * Execute an array of actions sequentially
    */
-  async execute(actions: Action[]): Promise<ExecutionResult> {
+  async execute(actions: Action[], runOptions?: Partial<ExecutionOptions>): Promise<ExecutionResult> {
+    const opts: Required<ExecutionOptions> = runOptions ? { ...this.options, ...runOptions } : this.options;
     this.isStopped = false;
     this.abortController = new AbortController();
     const results: ToolResult[] = [];
@@ -519,12 +530,12 @@ export class ActionExecutor {
         return { success: false, results, error: 'cancelled' };
       }
       const info: StepInfo = { action: actions[i], index: i, total: actions.length, signal: this.abortController.signal };
-      this.options.onStepStart(info);
-      const result = await executeAction(actions[i], this.options, info);
+      opts.onStepStart(info);
+      const result = await executeAction(actions[i], opts, info);
       result.id = actions[i].id ?? result.id;
       results.push(result);
       try {
-        this.options.onStepEnd(info, result);
+        opts.onStepEnd(info, result);
       } catch (hookError) {
         console.warn('[GhostCursor] onStepEnd hook failed:', hookError);
       }

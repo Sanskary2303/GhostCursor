@@ -530,6 +530,35 @@ describe('ChatWidget shell', () => {
     expect(onClearPreview).toHaveBeenCalled();
   });
 
+  it('tracks running page: navigate step has no other page label, subsequent step on that page has "on Settings"', async () => {
+    registerTarget('theme.toggle', {
+      page: 'settings',
+      resolve: () => document.createElement('input'),
+      operations: ['toggle'],
+    });
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    render(h(ActionApprovalPanel, {
+      actions: [
+        { id: 'a1', type: 'navigate', target_page: 'settings' },
+        { id: 'a2', type: 'toggle_switch', target_id: 'theme.toggle', state: true },
+      ],
+      onApprove: () => {},
+      currentPage: 'home',
+    }), host);
+
+    const steps = host.querySelectorAll('.gc-plan-step');
+    expect(steps).toHaveLength(2);
+
+    // The navigate step's text does not contain "on Settings"
+    expect(steps[0].textContent).not.toContain('on Settings');
+
+    // The toggle step's text contains "on Settings"
+    expect(steps[1].textContent).toContain('on Settings');
+  });
+
   it('renders SVG bar chart with createElementNS and sets textContent', () => {
     const barsCard = {
       type: 'bars' as const,

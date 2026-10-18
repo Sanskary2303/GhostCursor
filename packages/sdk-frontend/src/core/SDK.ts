@@ -194,7 +194,6 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     timeout: 8000,
     requireApproval: requireApprovalForActions,
     allowSemanticLookup,
-    cursor,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
     onStepApproval: async (_element, info) => {
       cursor.setCaption('Approve this step?');

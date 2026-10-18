@@ -40,7 +40,6 @@ export interface ExecutionOptions {
   stepByStep?: boolean;
   /** Called and awaited before acting in stepByStep mode. Returns true to proceed, false to halt. */
   onStepApproval?: (element: HTMLElement, info: StepInfo) => Promise<boolean> | boolean;
-  cursor?: any;
 }
 
 export interface ExecutionResult {
@@ -62,7 +61,6 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   onStepStart: () => {},
   onWait: () => {},
   allowSemanticLookup: false,
-  cursor: null,
 };
 
 function prefersReducedMotion(): boolean {
@@ -232,11 +230,6 @@ async function executeNeverRiskTarget(
 
   const riskInfo: StepInfo = { ...info, risk: 'never' };
   await animateCursorTo(freshElement, options, riskInfo);
-
-  if (options.cursor) {
-    options.cursor.highlight(freshElement);
-    options.cursor.setCaption("You'll need to click this yourself");
-  }
 
   options.onProgress(`${action.type}:${targetId}`, 'failed');
   return {

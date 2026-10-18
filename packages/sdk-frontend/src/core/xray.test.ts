@@ -115,4 +115,48 @@ describe('X-Ray Mode (X10)', () => {
 
     xray?.dispose();
   });
+
+  it('does not infinitely re-trigger mutation observer on self-updates and warns only once', async () => {
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => setTimeout(cb, 16));
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const btn1 = document.createElement('button');
+    btn1.setAttribute('data-ghost-id', 'dup');
+    document.body.appendChild(btn1);
+
+    const btn2 = document.createElement('button');
+    btn2.setAttribute('data-ghost-id', 'dup');
+    document.body.appendChild(btn2);
+
+    const xray = initXray({ xray: true });
+    const overlay = document.getElementById('ghost-cursor-xray')!;
+    expect(overlay).not.toBeNull();
+
+    let xrayChildListRecords = 0;
+    const testObserver = new MutationObserver(records => {
+      for (const r of records) {
+        if (r.type === 'childList') {
+          xrayChildListRecords++;
+        }
+      }
+    });
+    testObserver.observe(overlay, { childList: true, subtree: true });
+
+    // Append one unrelated <p> to document.body
+    const p = document.createElement('p');
+    p.textContent = 'unrelated element';
+    document.body.appendChild(p);
+
+    // Wait 300 ms
+    await new Promise(resolve => setTimeout(resolve, 300));
+
+    testObserver.disconnect();
+    xray?.dispose();
+
+    expect(xrayChildListRecords).toBeLessThan(10);
+    const dupWarns = warnSpy.mock.calls.filter(call =>
+      typeof call[0] === 'string' && call[0].includes('Duplicate target ID: "dup"')
+    );
+    expect(dupWarns).toHaveLength(1);
+  });
 });

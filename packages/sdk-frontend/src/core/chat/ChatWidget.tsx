@@ -1331,6 +1331,7 @@ class ActionApprovalPanel extends Component<ActionApprovalPanelProps, ActionAppr
     });
 
     const current = (currentPage || '').replace(/^\//, '') || 'home';
+    let pageAtStep = current;
 
     return (
       <div
@@ -1354,12 +1355,16 @@ class ActionApprovalPanel extends Component<ActionApprovalPanelProps, ActionAppr
           {actions.map((action: Action, index: number) => {
             const reg = action.target_id ? getRegisteredTarget(action.target_id) : undefined;
             const isConfirm = reg?.risk === 'confirm' || (action as any).risk === 'confirm';
-            let stepPage = action.target_page?.replace(/^\//, '');
-            if (!stepPage && reg && reg.page && reg.page !== 'global') {
-              stepPage = reg.page;
+            let otherPageLabel: string | null = null;
+            if (action.type === 'navigate' && action.target_page) {
+              pageAtStep = action.target_page.replace(/^\/+/, '') || 'home';
+            } else {
+              const stepPage = reg?.page && reg.page !== 'global' ? reg.page : pageAtStep;
+              if (stepPage.toLowerCase() !== current.toLowerCase()) {
+                const name = stepPage.split('/')[0];
+                otherPageLabel = name.charAt(0).toUpperCase() + name.slice(1);
+              }
             }
-            const isOtherPage = Boolean(stepPage && stepPage.toLowerCase() !== current.toLowerCase());
-            const otherPageLabel = stepPage && isOtherPage ? stepPage.charAt(0).toUpperCase() + stepPage.slice(1) : null;
 
             return (
               <li

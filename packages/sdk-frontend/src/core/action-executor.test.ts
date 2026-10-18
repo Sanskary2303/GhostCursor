@@ -182,17 +182,13 @@ describe('ActionExecutor', () => {
     });
 
     let aimedInfo: any = null;
-    const mockCursor = {
-      highlight: vi.fn(),
-      setCaption: vi.fn(),
-    };
+    const onAim = vi.fn((_el, info) => {
+      aimedInfo = info;
+    });
 
     const executor = new ActionExecutor({
       timeout: 500,
-      cursor: mockCursor,
-      onAim: (_el, info) => {
-        aimedInfo = info;
-      },
+      onAim,
     });
 
     const result = await executor.execute([{ id: 'n1', type: 'click', target_id: 'never_btn' }]);
@@ -202,9 +198,8 @@ describe('ActionExecutor', () => {
     expect(result.results[0].ok).toBe(false);
     expect(result.results[0].error).toBe('needs the user: high-risk control');
     expect(clicked).not.toHaveBeenCalled();
+    expect(onAim).toHaveBeenCalledTimes(1);
     expect(aimedInfo?.risk).toBe('never');
-    expect(mockCursor.highlight).toHaveBeenCalledWith(btn);
-    expect(mockCursor.setCaption).toHaveBeenCalledWith("You'll need to click this yourself");
   });
 });
 

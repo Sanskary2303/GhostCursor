@@ -716,6 +716,16 @@ test('suggestion chips: opening chat on product page displays chip and clicking 
   await expect(chat(page)).toContainText('units', { timeout: 20_000 });
 });
 
+test('suggestion chips: clicking "What is the return policy?" on home page answers with 30 days', async ({ page }) => {
+  await page.goto('/');
+  const launcher = page.getByRole('button', { name: 'Open Ghost Cursor chat' });
+  await launcher.click();
+  const chip = page.getByRole('button', { name: 'What is the return policy?' });
+  await expect(chip).toBeVisible({ timeout: 10_000 });
+  await chip.click();
+  await expect(chat(page)).toContainText('30 days', { timeout: 20_000 });
+});
+
 
 
 

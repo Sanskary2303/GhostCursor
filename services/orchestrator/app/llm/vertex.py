@@ -323,6 +323,26 @@ class MockVertexAIClient(BaseVertexClient):
                 {"id": str(uuid.uuid4()), "tool": "simulate_discount_roi", "parameters": {"promo_code": "SAVE20", "subtotal": 129.99}},
             ],
         },
+        "return policy": {
+            "status": "completed",
+            "reply": "You can return unworn items in their original packaging within 30 days of purchase. Refunds go back to your original payment method within 5-7 business days.",
+        },
+        "refund": {
+            "status": "completed",
+            "reply": "Refunds are processed to your original payment method within 5-7 business days after we receive the return.",
+        },
+        "shipping": {
+            "status": "completed",
+            "reply": "Standard shipping (5-7 business days) is free on orders over $75. Expedited (3-4 days) is $9.99 and Express (1-2 days) is $19.99.",
+        },
+        "discount": {
+            "status": "completed",
+            "reply": "You can try promo code SAVE20 for 20% off, and students get 10% off with verification.",
+        },
+        "popular": {
+            "status": "completed",
+            "reply": "Our most popular sneakers are the Nike Air Max 90 ($129.99) and the Air Jordan 1 Retro ($179.99). Want me to open one of them?",
+        },
         "what": {
             "status": "completed",
             "reply": "You're currently on the product detail page for the Air Max 90 sneakers. The price is $129.99. Available sizes range from 7 to 13 in US Men's sizes. Would you like me to help you add this to your cart or check availability for a specific size?",

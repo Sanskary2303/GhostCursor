@@ -103,6 +103,13 @@ export function initXray(options: XrayOptions): XrayInstance | null {
 
   const seenIds = new Map<string, HTMLElement>();
 
+  const warned = new Set<string>();
+  const warnOnce = (key: string, message: string, el: HTMLElement) => {
+    if (warned.has(key)) return;
+    warned.add(key);
+    console.warn(message, el);
+  };
+
   function refresh() {
     if (!overlay || !document.body.contains(overlay)) return;
     overlay.innerHTML = '';
@@ -116,19 +123,19 @@ export function initXray(options: XrayOptions): XrayInstance | null {
 
       // 1. Check duplicates
       if (seenIds.has(id)) {
-        console.warn(`[GhostCursor X-Ray] Duplicate target ID: "${id}"`, el);
+        warnOnce(`dup:${id}`, `[GhostCursor X-Ray] Duplicate target ID: "${id}"`, el);
       } else {
         seenIds.set(id, el);
       }
 
       // 2. Check hidden
       if (isElementHidden(el)) {
-        console.warn(`[GhostCursor X-Ray] Hidden target element: "${id}"`, el);
+        warnOnce(`hidden:${id}`, `[GhostCursor X-Ray] Hidden target element: "${id}"`, el);
       }
 
       // 3. Check sensitive
       if (isElementSensitive(el, id)) {
-        console.warn(`[GhostCursor X-Ray] Sensitive target detected: "${id}"`, el);
+        warnOnce(`sensitive:${id}`, `[GhostCursor X-Ray] Sensitive target detected: "${id}"`, el);
       }
 
       // 4. Render outline & label
@@ -174,7 +181,9 @@ export function initXray(options: XrayOptions): XrayInstance | null {
   window.addEventListener('scroll', onUpdate, { passive: true, capture: true });
 
   const observer = typeof MutationObserver !== 'undefined'
-    ? new MutationObserver(onUpdate)
+    ? new MutationObserver(records => {
+        if (records.some(r => !overlay!.contains(r.target))) onUpdate();
+      })
     : null;
 
   if (observer) {

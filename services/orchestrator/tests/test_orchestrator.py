@@ -1608,6 +1608,92 @@ async def test_summaries_413_exceeds_character_limit(auth_headers):
         assert res.status_code == 413
 
 
+@pytest.mark.asyncio
+async def test_mock_fixtures_for_chips(auth_headers):
+    """Verify mock answers for chip questions: return policy, shipping, refund, popular, and track guided tour"""
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. "What is the return policy?" -> completed with "30 days"
+        res1 = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "What is the return policy?",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res1.status_code == 200
+        d1 = res1.json()
+        assert d1["status"] == "completed"
+        assert "30 days" in d1["reply"]
+
+        # 2. "What are the shipping options?" -> completed with "$75"
+        res2 = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "What are the shipping options?",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res2.status_code == 200
+        d2 = res2.json()
+        assert d2["status"] == "completed"
+        assert "$75" in d2["reply"]
+
+        # 3. "How long do refunds take?" -> completed with "5-7 business days"
+        res3 = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "How long do refunds take?",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res3.status_code == 200
+        d3 = res3.json()
+        assert d3["status"] == "completed"
+        assert "5-7 business days" in d3["reply"]
+
+        # 4. "Show me popular sneakers" -> completed with "Air Max 90"
+        res4 = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "Show me popular sneakers",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res4.status_code == 200
+        d4 = res4.json()
+        assert d4["status"] == "completed"
+        assert "Air Max 90" in d4["reply"]
+
+        # 5. "How do I track my return?" -> awaiting_actions with guided_tour
+        res5 = await client.post(
+            "/v1/runs",
+            json={
+                "protocolVersion": "1",
+                "requestId": str(uuid.uuid4()),
+                "message": "How do I track my return?",
+                "context": {"page": "home", "values": {}, "availableTargets": []},
+            },
+            headers=auth_headers,
+        )
+        assert res5.status_code == 200
+        d5 = res5.json()
+        assert d5["status"] == "awaiting_actions"
+        assert any(a.get("type") == "guided_tour" for a in d5.get("actions", []))
+
+
 
 
 

@@ -198,3 +198,4 @@ export function initXray(options: XrayOptions): XrayInstance | null {
 
   return { dispose, refresh };
 }
+

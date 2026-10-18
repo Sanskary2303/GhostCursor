@@ -243,3 +243,4 @@ def lint_brain_dir(
         all_errors.extend(errs)
 
     return all_errors
+

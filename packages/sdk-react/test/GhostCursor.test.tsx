@@ -100,7 +100,7 @@ describe('@ghost-cursor/sdk-react', () => {
     const { createRequire } = await import('module');
     const require = createRequire(import.meta.url);
     const resolved = require.resolve('@ghost-cursor/sdk-react/dist/index.css');
-    expect(resolved).toContain('packages/sdk-react/dist/index.css');
+    expect(resolved.replace(/\\/g, '/')).toContain('packages/sdk-react/dist/index.css');
   });
 });
 

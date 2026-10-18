@@ -492,17 +492,18 @@ export class TransportManager {
     this.pendingRequestId = requestId;
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Request timeout'));
-      }, 30000);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const arm = () => {
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error('Request timeout'));
+        }, 30000);
+      };
+      arm();
 
-      const offStatus = callbacks?.onStatus
-        ? this.transport.on('status', (e) => callbacks.onStatus!(e.data))
-        : null;
-      const offDelta = callbacks?.onDelta
-        ? this.transport.on('delta', (e) => callbacks.onDelta!(e.data))
-        : null;
+      const offStatus = this.transport.on('status', (e) => { arm(); callbacks?.onStatus?.(e.data); });
+      const offDelta = this.transport.on('delta', (e) => { arm(); callbacks?.onDelta?.(e.data); });
 
       const offMessage = this.transport.on('message', (event) => {
         if (event.data.runId) {
@@ -521,8 +522,9 @@ export class TransportManager {
       });
 
       const cleanup = () => {
-        offStatus?.();
-        offDelta?.();
+        if (timeout) clearTimeout(timeout);
+        offStatus();
+        offDelta();
         offMessage();
         offError();
       };
@@ -558,17 +560,18 @@ export class TransportManager {
     };
 
     return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('Request timeout'));
-      }, 30000);
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+      const arm = () => {
+        if (timeout) clearTimeout(timeout);
+        timeout = setTimeout(() => {
+          cleanup();
+          reject(new Error('Request timeout'));
+        }, 30000);
+      };
+      arm();
 
-      const offStatus = callbacks?.onStatus
-        ? this.transport.on('status', (e) => callbacks.onStatus!(e.data))
-        : null;
-      const offDelta = callbacks?.onDelta
-        ? this.transport.on('delta', (e) => callbacks.onDelta!(e.data))
-        : null;
+      const offStatus = this.transport.on('status', (e) => { arm(); callbacks?.onStatus?.(e.data); });
+      const offDelta = this.transport.on('delta', (e) => { arm(); callbacks?.onDelta?.(e.data); });
 
       const offMessage = this.transport.on('message', (event) => {
         if (event.data.runId === this.runId && event.data.revision > this.revision) {
@@ -586,8 +589,9 @@ export class TransportManager {
       });
 
       const cleanup = () => {
-        offStatus?.();
-        offDelta?.();
+        if (timeout) clearTimeout(timeout);
+        offStatus();
+        offDelta();
         offMessage();
         offError();
       };

@@ -47,7 +47,7 @@ export const WIDGET_CSS = `
 .gc-typing i:nth-child(2) { animation-delay: .15s; }
 .gc-typing i:nth-child(3) { animation-delay: .3s; }
 .gc-error { margin: 0 16px 12px; padding: 10px 12px; border-radius: 10px; background: rgba(239, 68, 68, .12); border: 1px solid rgba(239, 68, 68, .35); color: var(--gc-danger); font-size: 13px; }
-.gc-composer { padding: 12px 14px 14px; border-top: 1px dashed var(--gc-accent-line); }
+.gc-composer { position: relative; padding: 12px 14px 14px; border-top: 1px dashed var(--gc-accent-line); }
 .gc-input-row { display: flex; gap: 8px; align-items: flex-end; }
 .gc-input { flex: 1; min-height: 44px; max-height: 120px; padding: 11px 14px; border-radius: 12px; border: 1px solid var(--gc-border); background: var(--gc-surface); color: var(--gc-text); font: inherit; font-size: 14px; line-height: 1.4; resize: none; outline: none; }
 .gc-input::placeholder { color: var(--gc-muted); }

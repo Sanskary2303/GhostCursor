@@ -7,7 +7,7 @@
   "scripts": {
     "install:all": "npm ci",
     "build": "npm run build:all",
-    "build:all": "npm run build --workspaces",
+    "build:all": "npm run build --workspaces && npm run test:css-export",
     "test": "npm run test:all",
     "test:all": "npm run test --workspaces",
     "lint": "npm run lint:all",
@@ -20,7 +20,9 @@
     "schemas": "npm run generate:schemas --workspace=packages/sdk-frontend",
     "build:e2e": "npm run build --workspace=packages/sdk-frontend && npm run build --workspace=packages/sdk-react && VITE_E2E_HOOKS=1 npm run build --workspace=demo/shophive/frontend",
     "test:e2e": "npm run build:e2e && playwright test -c e2e",
+    "test:e2e:stream": "npm run build:e2e && GC_E2E_STREAMING=1 playwright test -c e2e",
     "test:browser": "npm run test:e2e",
+    "test:css-export": "node scripts/test-resolve-css.js",
     "clean": "rm -rf node_modules packages/*/node_modules packages/*/dist demo/*/frontend/node_modules demo/*/frontend/dist services/orchestrator/venv"
   },
   "workspaces": [

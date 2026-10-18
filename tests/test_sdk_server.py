@@ -2464,6 +2464,56 @@ async def test_stream_turn_emits_status_deltas_and_envelope():
     assert messages[1].content == "Your order ORD-123 has shipped."
 
 
+@pytest.mark.asyncio
+async def test_stream_turn_saves_chat_before_envelope_or_early_close():
+    """stream_turn persists the chat turn before emitting deltas and envelope."""
+    store = InMemoryChatStore()
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="shophive_demo",
+    )
+    backend.attach_chat_store(store)
+
+    run_id = str(uuid.uuid4())
+    def mock_handler(request):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": run_id,
+            "revision": 0,
+            "status": "completed",
+            "reply": "Saved before stream finishes.",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    session = await store.create_session("u_save", "shophive_demo", "Save check")
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session.session_id,
+        "message": "Please save this turn.",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    gen = backend.stream_turn(payload, "u_save")
+    async for chunk in gen:
+        if chunk.startswith("event: envelope"):
+            await gen.aclose()
+            break
+
+    # The session has the user message and the assistant reply
+    messages = await store.get_messages(session.session_id, "u_save")
+    assert len(messages) == 2
+    assert messages[0].role == "user"
+    assert messages[0].content == "Please save this turn."
+    assert messages[1].role == "assistant"
+    assert messages[1].content == "Saved before stream finishes."
+
+
+
 
 
 

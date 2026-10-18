@@ -740,6 +740,12 @@ class GhostCursorBackend:
             if BRAIN_CANARY in json.dumps(result):
                 raise GatewayError(502, "disclosure_blocked")
 
+            if self.chat_store:
+                safe_response = response.model_copy(
+                    update={"reply": result["reply"], "actions": result["actions"]}
+                )
+                await self._persist_turn(payload, safe_response, user_id, executed_tool_calls=executed_tool_calls)
+
             # Stream reply text deltas, scanning each delta for canary
             reply_text = result.get("reply", "")
             if reply_text:
@@ -756,12 +762,6 @@ class GhostCursorBackend:
 
             # Final envelope event
             yield f"event: envelope\ndata: {json.dumps(result)}\n\n"
-
-            if self.chat_store:
-                safe_response = response.model_copy(
-                    update={"reply": result["reply"], "actions": result["actions"]}
-                )
-                await self._persist_turn(payload, safe_response, user_id, executed_tool_calls=executed_tool_calls)
 
     def handle_turn_sync(
         self,

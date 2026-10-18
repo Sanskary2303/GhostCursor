@@ -245,7 +245,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       return;
     }
     // 3. Not inside sensitive containers
-    if (el.closest('[data-sensitive], [data-pii], .sensitive-data, #credit-card-form, [autocomplete*="password"], [autocomplete="cc-*"]')) {
+    if (el.closest('[data-sensitive], [data-pii], .sensitive-data, #credit-card-form, [autocomplete*="password"], [autocomplete^="cc-"]')) {
       if (this.state.askBubble) this.setState({ askBubble: null });
       return;
     }

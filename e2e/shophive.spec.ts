@@ -38,6 +38,9 @@ type CursorSample = { state: string; transform: string; opacity: string; hit: st
 const cursorSamples = (page: Page): Promise<CursorSample[]> => page.evaluate(() => (window as any).__gcSamples);
 
 test.beforeEach(async ({ page }) => {
+  if (process.env.GC_E2E_STREAMING === '1') {
+    await page.addInitScript(() => { (window as any).__GC_STREAMING = true; });
+  }
   await page.goto('/');
   const btn = page.getByRole('button', { name: 'Sign in (demo)' });
   if (await btn.isVisible()) {
@@ -119,15 +122,21 @@ test('dark mode', async ({ page }) => {
 
 test('browser only talks to its own gateway and gets a public envelope', async ({ page }) => {
   const hosts = new Set<string>();
-  const bodies: any[] = [];
+  const raws: string[] = [];
   page.on('request', r => hosts.add(new URL(r.url()).host));
   page.on('response', async r => {
-    if (r.request().method() === 'POST' && r.url().endsWith('/api/ghost-cursor')) bodies.push(await r.json());
+    if (r.request().method() === 'POST' && r.url().endsWith('/api/ghost-cursor')) raws.push(await r.text());
   });
   await page.goto('/');
   await ask(page, 'Where is my order SH-1024?');
   await expect(chat(page)).toContainText('UPS', { timeout: 20_000 });
   expect([...hosts]).toEqual(['127.0.0.1:8081']);
+  const bodies: any[] = [];
+  for (const raw of raws) {
+    expect(raw).not.toContain('GHOST_BRAIN_SERVER_ONLY_CANARY_2026');
+    const m = /event: envelope\ndata: (.*)\n/.exec(raw);
+    bodies.push(m ? JSON.parse(m[1]) : JSON.parse(raw));
+  }
   for (const b of bodies) {
     expect(Object.keys(b).sort()).toEqual(['actions', 'protocolVersion', 'questions', 'reply', 'revision', 'runId', 'status']);
     expect(JSON.stringify(b)).not.toContain('GHOST_BRAIN_SERVER_ONLY_CANARY_2026');
@@ -535,8 +544,20 @@ test('chat history drawer and re-hydration on reload', async ({ page }) => {
   await expect(chat(page)).toContainText('What sizes are available?', { timeout: 10_000 });
   await expect(chat(page)).toContainText('Earlier in this chat');
 
-  // Open "Chat history"
-  await page.getByRole('button', { name: 'Chat history' }).click();
+  // Type "/" in the composer: slash menu is visible and stays within panel bounds
+  const composerInput = page.getByRole('textbox', { name: 'Message input' });
+  await composerInput.fill('/');
+  const slashMenu = page.locator('.gc-slash-menu');
+  await expect(slashMenu).toBeVisible();
+
+  const menuBox = await slashMenu.boundingBox();
+  const panelBox = await chat(page).boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  expect(menuBox!.y).toBeGreaterThanOrEqual(panelBox!.y);
+
+  // Click the /history item. The drawer opens.
+  await slashMenu.getByText('/history').click();
   const drawer = page.locator('.gc-drawer');
   await expect(drawer).toBeVisible();
 

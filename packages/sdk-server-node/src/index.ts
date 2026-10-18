@@ -540,5 +540,178 @@ export class Gateway {
 
     return publicResp;
   }
+
+  async *streamTurn(rawRequest: any, subject: string): AsyncGenerator<string, void, unknown> {
+    const req = validateBrowserRequest(rawRequest);
+    const toolsMap = await this.resolveTools(subject);
+    const toolDeclarations = this.getToolDeclarations(toolsMap);
+
+    yield `event: status\ndata: ${JSON.stringify({ status: "thinking" })}\n\n`;
+
+    let hostedResponse: HostedRunResponse;
+
+    if (req.command === "start") {
+      const brain = await this.resolveBrain(subject, req.context);
+      const capabilities = await this.resolveCapabilities(subject);
+
+      const payload = {
+        protocolVersion: req.protocolVersion,
+        requestId: req.requestId,
+        message: req.message,
+        context: req.context,
+        brain,
+        capabilities,
+        tools: toolDeclarations,
+      };
+
+      hostedResponse = await this.callHostedApi("/v1/runs", payload, subject);
+    } else {
+      const payload: Record<string, any> = {
+        protocolVersion: req.protocolVersion,
+        eventId: req.eventId,
+        revision: req.revision,
+        kind: req.kind,
+        results: req.results,
+      };
+      if (req.answer !== undefined) payload.answer = req.answer;
+      if (req.context !== undefined) payload.context = req.context;
+
+      hostedResponse = await this.callHostedApi(`/v1/runs/${req.runId}/continue`, payload, subject);
+    }
+
+    const MAX_TOOL_ROUNDS = 4;
+    const MAX_TOOL_CALLS_PER_ROUND = 4;
+    const MAX_TOOL_OUTPUT_LENGTH = 16000;
+
+    let rounds = 0;
+    while (hostedResponse.toolCalls && hostedResponse.toolCalls.length > 0 && rounds < MAX_TOOL_ROUNDS) {
+      rounds++;
+      const toolCalls = hostedResponse.toolCalls;
+
+      for (const tc of toolCalls) {
+        yield `event: status\ndata: ${JSON.stringify({ status: `tool:${tc.tool}` })}\n\n`;
+      }
+
+      const valid = verifyToolBatch(
+        this.loopbackKey,
+        this.tenantId,
+        hostedResponse.runId,
+        hostedResponse.revision,
+        toolCalls,
+        hostedResponse.loopbackSignature
+      );
+      if (!valid) {
+        throw new GatewayError(502, "bad_tool_signature");
+      }
+
+      const toolResults: Array<{ id: string; ok: boolean; output?: any; error?: string }> = [];
+
+      if (toolCalls.length > MAX_TOOL_CALLS_PER_ROUND) {
+        for (const tc of toolCalls) {
+          toolResults.push({ id: tc.id, ok: false, error: "too many tool calls in one plan" });
+        }
+      } else {
+        for (const tc of toolCalls) {
+          const tool = toolsMap.get(tc.tool);
+          if (!tool) {
+            toolResults.push({ id: tc.id, ok: false, error: `Tool not found: ${tc.tool}` });
+            continue;
+          }
+
+          const args = tc.parameters ?? {};
+          if (!matchesSchema(tool.inputSchema, args)) {
+            toolResults.push({ id: tc.id, ok: false, error: "invalid arguments" });
+            continue;
+          }
+
+          const ctx: ToolContext = {
+            subject,
+            idempotencyKey: `${hostedResponse.runId}:${hostedResponse.revision}:${tc.id}`,
+          };
+
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const timeout = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("tool timed out")), this.toolTimeoutMs);
+          });
+          try {
+            const output = await Promise.race([Promise.resolve(tool.execute(args, ctx)), timeout]);
+            let outVal = output;
+            const serialized = JSON.stringify(output);
+            if (serialized && serialized.length > MAX_TOOL_OUTPUT_LENGTH) {
+              outVal = { truncated: true, message: "Output exceeded 16KB limit" };
+            }
+            toolResults.push({ id: tc.id, ok: true, output: outVal });
+          } catch (err: any) {
+            toolResults.push({ id: tc.id, ok: false, error: err?.message || "tool error" });
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
+        }
+      }
+
+      const continuePayload = {
+        protocolVersion: "1",
+        eventId: randomUUID(),
+        revision: hostedResponse.revision,
+        kind: "tools",
+        results: toolResults,
+      };
+
+      yield `event: status\ndata: ${JSON.stringify({ status: "planning" })}\n\n`;
+      hostedResponse = await this.callHostedApi(
+        `/v1/runs/${hostedResponse.runId}/continue`,
+        continuePayload,
+        subject
+      );
+    }
+
+    if (hostedResponse.toolCalls && hostedResponse.toolCalls.length > 0) {
+      throw new GatewayError(502, "tool_round_limit");
+    }
+
+    if (hostedResponse.actions && hostedResponse.actions.length > 0) {
+      yield `event: status\ndata: ${JSON.stringify({ status: "planning" })}\n\n`;
+    }
+
+    let publicResp: PublicResponse = {
+      protocolVersion: "1",
+      runId: hostedResponse.runId,
+      revision: hostedResponse.revision,
+      status: hostedResponse.status as any,
+      reply: hostedResponse.reply,
+      questions: hostedResponse.questions ?? null,
+      actions: hostedResponse.actions ?? null,
+    };
+
+    if (this.filterResponse) {
+      try {
+        publicResp = await this.filterResponse(publicResp, subject);
+      } catch (err) {
+        if (err instanceof GatewayError) throw err;
+        throw new GatewayError(502, "bad_public_response");
+      }
+    }
+
+    publicResp = validatePublicResponse(publicResp);
+
+    if (JSON.stringify(publicResp).includes(BRAIN_CANARY)) {
+      throw new GatewayError(502, "disclosure_blocked");
+    }
+
+    const reply = publicResp.reply || "";
+    if (reply) {
+      const words = reply.match(/\S+\s*/g) || [reply];
+      let accumulated = "";
+      for (const word of words) {
+        if (word.includes(BRAIN_CANARY) || (accumulated + word).includes(BRAIN_CANARY)) {
+          throw new GatewayError(502, "disclosure_blocked");
+        }
+        accumulated += word;
+        yield `event: delta\ndata: ${JSON.stringify({ delta: word })}\n\n`;
+      }
+    }
+
+    yield `event: envelope\ndata: ${JSON.stringify(publicResp)}\n\n`;
+  }
 }
 

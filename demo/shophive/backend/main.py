@@ -19,7 +19,7 @@ from contextlib import asynccontextmanager
 import logging
 import secrets
 from fastapi import FastAPI, Depends, Request, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.middleware.sessions import SessionMiddleware
 
 logger = logging.getLogger(__name__)
@@ -198,6 +198,32 @@ async def handle_ghost_turn(request: Request, user_id: str = Depends(require_use
             {"error": "invalid_json"},
             status_code=400,
             headers={"Cache-Control": "no-store"},
+        )
+
+    accept = request.headers.get("accept", "")
+    if "text/event-stream" in accept:
+        await ensure_tables()
+
+        async def event_generator():
+            try:
+                async for chunk in ghost.stream_turn(payload=payload, user_id=user_id):
+                    yield chunk
+            except GatewayError as e:
+                import json
+                yield f"event: error\ndata: {json.dumps({'error': e.code})}\n\n"
+            except Exception:
+                import json
+                logger.exception("Internal error in stream_turn")
+                yield f"event: error\ndata: {json.dumps({'error': 'internal_error'})}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
         )
 
     try:

@@ -57,7 +57,7 @@ export interface ChatWidgetProps {
   };
   bridge?: Bridge<WidgetBridgeState>;
   requireApprovalForActions: boolean;
-  onSendMessage: (message: string, context: any) => Promise<any>;
+  onSendMessage: (message: string, context: any, callbacks?: { onStatus?: (status: string) => void; onDelta?: (delta: string) => void }) => Promise<any>;
   onActionApproval: (actions: any[], token?: string, stepByStep?: boolean) => Promise<any>;
   onCancelApproval?: () => Promise<any>;
   onStop?: () => void;
@@ -86,6 +86,7 @@ export interface ChatWidgetState {
   hasRehydrated?: boolean;
   askBubble: { text: string; top: number; left: number } | null;
   showSlashMenu: boolean;
+  streamingStatus?: string | null;
 }
 
 function formatRelativeTime(dateStr?: string): string {
@@ -457,9 +458,24 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
 
     try {
       this.abortController = new AbortController();
-      const response = await this.props.onSendMessage(message, this.state.context);
+      const response = await this.props.onSendMessage(message, this.state.context, {
+        onStatus: (status: string) => {
+          this.setState({ streamingStatus: status });
+        },
+        onDelta: (delta: string) => {
+          this.setState(prev => ({
+            messages: prev.messages.map(m =>
+              m.id === assistantMsg.id
+                ? { ...m, content: m.content + delta, isStreaming: true }
+                : m
+            ),
+          }));
+        },
+      });
+      this.setState({ streamingStatus: null });
       this.applyResponse(assistantMsg.id, response);
     } catch (error) {
+      this.setState({ streamingStatus: null });
       const raw = error instanceof Error ? error.message : 'Unknown error';
       const msgContent = raw === 'HTTP 401' ? 'Please sign in to use the assistant.' : `Error: ${raw}`;
       const stateError = raw === 'HTTP 401' ? 'Please sign in to use the assistant.' : raw;
@@ -472,7 +488,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
         error: stateError,
       }));
     } finally {
-      this.setState({ isLoading: false });
+      this.setState({ isLoading: false, streamingStatus: null });
     }
   };
 
@@ -586,9 +602,24 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     const assistantMsg = this.addMessage({ role: 'assistant', content: '', isStreaming: true });
 
     try {
-      const response = await this.props.onSendMessage(message, this.state.context);
+      const response = await this.props.onSendMessage(message, this.state.context, {
+        onStatus: (status: string) => {
+          this.setState({ streamingStatus: status });
+        },
+        onDelta: (delta: string) => {
+          this.setState(prev => ({
+            messages: prev.messages.map(m =>
+              m.id === assistantMsg.id
+                ? { ...m, content: m.content + delta, isStreaming: true }
+                : m
+            ),
+          }));
+        },
+      });
+      this.setState({ streamingStatus: null });
       this.applyResponse(assistantMsg.id, response);
     } catch (error) {
+      this.setState({ streamingStatus: null });
       this.setState(prev => ({
         messages: prev.messages.map(m =>
           m.id === assistantMsg.id
@@ -597,7 +628,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
         ),
       }));
     } finally {
-      this.setState({ isLoading: false });
+      this.setState({ isLoading: false, streamingStatus: null });
     }
   };
 
@@ -635,9 +666,15 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   }
 
   private statusInfo(): { state: 'online' | 'thinking' | 'working' | 'error'; text: string } {
-    const { ui, isExecutingActions, isLoading } = this.state;
+    const { ui, isExecutingActions, isLoading, streamingStatus } = this.state;
     if (ui.step) return { state: 'working', text: `Step ${ui.step.index}/${ui.step.total}` };
     if (isExecutingActions) return { state: 'working', text: 'Working…' };
+    if (streamingStatus) {
+      if (streamingStatus === 'thinking') return { state: 'thinking', text: 'Thinking…' };
+      if (streamingStatus === 'planning') return { state: 'thinking', text: 'Planning…' };
+      if (streamingStatus.startsWith('tool:')) return { state: 'thinking', text: `Tool: ${streamingStatus.slice(5)}` };
+      return { state: 'thinking', text: streamingStatus };
+    }
     if (isLoading) return { state: 'thinking', text: 'Thinking…' };
     if (ui.outcome === 'error') return { state: 'error', text: 'Needs help' };
     if (ui.outcome === 'success') return { state: 'online', text: 'Done ✓' };
@@ -800,7 +837,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   <div className="gc-wordmark">{BRAND.wordmark}</div>
                   <div className="gc-tagline">{BRAND.tagline}</div>
                 </div>
-                <span className="gc-status" data-state={this.statusInfo().state}>{this.statusInfo().text}</span>
+                <span className="gc-status" data-state={this.statusInfo().state} data-status={this.state.streamingStatus || undefined}>{this.statusInfo().text}</span>
                 {this.props.history && (
                   <button
                     type="button"

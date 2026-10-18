@@ -65,6 +65,7 @@ export interface CreateGhostCursorOptions {
   requireApprovalForActions?: boolean;
   transport?: 'http' | 'websocket';
   allowSemanticLookup?: boolean;
+  streaming?: boolean;
   onMessage?: (message: Message) => void;
   onActionsRequested?: (actions: Action[]) => void;
   onContextChange?: (context: PageContext) => void;
@@ -94,6 +95,8 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     onActionsRequested,
     onContextChange,
   } = options;
+
+  const isStreaming = options.streaming ?? (typeof window !== 'undefined' && Boolean((window as any).__GC_STREAMING));
 
   // Drop undefined values so wrappers that forward every key don't erase the defaults.
   const definedTheme = Object.fromEntries(
@@ -127,6 +130,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   const transport = createTransport({
     gatewayUrl,
     headers,
+    streaming: isStreaming,
     onMessage: handleResponse,
     onError: (error) => console.error('[GhostCursor] Transport error:', error),
     onClose: () => console.log('[GhostCursor] Connection closed'),
@@ -336,7 +340,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
           lastStatus = null;
         },
       },
-      onSendMessage: async (msg: string, ctx: any) => {
+      onSendMessage: async (msg: string, ctx: any, callbacks?: any) => {
         const rawCtx = contextProvider.captureContext();
         const pageContext = {
           page: rawCtx?.page ?? getPage(),
@@ -345,10 +349,10 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         };
         let res: PublicResponse;
         if (currentRunId && lastStatus === 'awaiting_answer') {
-          res = await transportManager.continue('answer', { answer: msg });
+          res = await transportManager.continue('answer', { answer: msg }, callbacks);
         } else {
           const sid = await ensureSession();
-          res = await transportManager.start(msg, pageContext, sid ?? undefined);
+          res = await transportManager.start(msg, pageContext, sid ?? undefined, callbacks);
         }
         rememberStatus(res);
         return res;

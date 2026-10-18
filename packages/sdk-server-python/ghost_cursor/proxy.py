@@ -594,6 +594,175 @@ class GhostCursorBackend:
 
             return result
 
+    async def stream_turn(
+        self,
+        payload: Dict[str, Any],
+        user_id: str,
+        current_page: Optional[str] = None,
+    ):
+        """
+        Stream a user turn via Server-Sent Events (SSE).
+        Streams:
+        - status events (thinking, tool:<tool_name>, planning)
+        - reply text deltas (scanned for canary before emitting)
+        - final envelope event with the validated public envelope
+        """
+        import re
+
+        if not isinstance(payload, dict):
+            raise GatewayError(400, "invalid_request")
+
+        try:
+            if payload.get("command") == "start":
+                req_model = BrowserStart.model_validate(payload)
+            else:
+                req_model = BrowserContinue.model_validate(payload)
+        except ValidationError:
+            raise GatewayError(400, "invalid_request")
+
+        # 1. Initial status event
+        yield f"event: status\ndata: {json.dumps({'status': 'thinking'})}\n\n"
+
+        raw_client = self._get_http_client()
+        client = await raw_client if inspect.isawaitable(raw_client) else raw_client
+        async with client:
+            if isinstance(req_model, BrowserStart):
+                # Load brain context
+                page = current_page or req_model.context.page
+                brain_content = self.brain_loader.load_context(page)
+
+                hosted_request = HostedRunRequest(
+                    protocolVersion=req_model.protocolVersion,
+                    requestId=str(req_model.requestId),
+                    message=req_model.message,
+                    context=req_model.context.model_dump(),
+                    brain=brain_content,
+                    capabilities=[],
+                    tools=self.get_tool_declarations(),
+                )
+
+                # Send to Ghost Cursor Cloud
+                response = await self._call_hosted_api(hosted_request, user_id, client=client)
+            else:
+                continue_request = HostedRunRequest(
+                    protocolVersion=req_model.protocolVersion,
+                    runId=str(req_model.runId),
+                    eventId=str(req_model.eventId),
+                    revision=req_model.revision,
+                    kind=req_model.kind,
+                    results=[
+                        ToolCallResponse(
+                            id=r.id,
+                            ok=r.ok,
+                            output=r.output,
+                            error=r.error,
+                        )
+                        for r in req_model.results
+                    ] if req_model.results else None,
+                    answer=req_model.answer,
+                    context=req_model.context.model_dump() if req_model.context is not None else {},
+                )
+                response = await self._call_hosted_api(continue_request, user_id, client=client)
+
+            # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
+            rounds = 0
+            executed_tool_calls: List[Dict[str, str]] = []
+            while response.toolCalls and rounds < self.config.max_tool_rounds:
+                rounds += 1
+                for tc in response.toolCalls:
+                    executed_tool_calls.append({"id": tc.id, "tool": tc.tool})
+                    yield f"event: status\ndata: {json.dumps({'status': f'tool:{tc.tool}'})}\n\n"
+
+                # Verify HMAC loopback signature before executing local tools
+                key = loopback_key(self.config.api_key)
+                if not verify_tool_batch(
+                    key=key,
+                    tenant=self.config.tenant_id,
+                    run_id=response.runId,
+                    revision=response.revision,
+                    tool_calls=response.toolCalls,
+                    signature_payload=response.loopbackSignature,
+                ):
+                    raise GatewayError(502, "bad_tool_signature")
+
+                tool_results = await self._execute_local_tools(
+                    response.runId,
+                    response.revision,
+                    response.toolCalls,
+                    user_id,
+                )
+
+                # Continue run with tool results
+                continue_request = HostedRunRequest(
+                    protocolVersion="1",
+                    runId=response.runId,
+                    eventId=str(uuid.uuid4()),
+                    revision=response.revision,
+                    kind="tools",
+                    results=tool_results,
+                )
+                yield f"event: status\ndata: {json.dumps({'status': 'planning'})}\n\n"
+                response = await self._call_hosted_api(continue_request, user_id, client=client)
+
+            if response.toolCalls or response.status == "awaiting_tools":
+                raise GatewayError(502, "tool_round_limit")
+
+            if response.actions:
+                yield f"event: status\ndata: {json.dumps({'status': 'planning'})}\n\n"
+
+            # Return public projection (exclude toolCalls, brain, etc.)
+            public_resp = self._project_public_response(response)
+
+            # Run optional response filter
+            if self.config.filter_response:
+                try:
+                    res = self.config.filter_response(public_resp, user_id)
+                    if inspect.isawaitable(res):
+                        public_resp = await res
+                    else:
+                        public_resp = res
+                except GatewayError:
+                    raise
+                except Exception as e:
+                    logger.warning(f"Filter response error: {e}")
+                    raise GatewayError(502, "bad_public_response")
+
+            if not isinstance(public_resp, dict):
+                raise GatewayError(502, "bad_public_response")
+
+            try:
+                envelope = PublicEnvelope.model_validate(public_resp)
+                result = envelope.model_dump()
+            except ValidationError:
+                raise GatewayError(502, "bad_public_response")
+
+            # Scan envelope for canary before emitting any deltas
+            if BRAIN_CANARY in json.dumps(result):
+                raise GatewayError(502, "disclosure_blocked")
+
+            # Stream reply text deltas, scanning each delta for canary
+            reply_text = result.get("reply", "")
+            if reply_text:
+                chunks = re.findall(r"\S+\s*", reply_text) or [reply_text]
+                accumulated = ""
+                for chunk in chunks:
+                    if BRAIN_CANARY in chunk:
+                        raise GatewayError(502, "disclosure_blocked")
+                    accumulated += chunk
+                    if BRAIN_CANARY in accumulated:
+                        raise GatewayError(502, "disclosure_blocked")
+                    yield f"event: delta\ndata: {json.dumps({'delta': chunk})}\n\n"
+                    await asyncio.sleep(0)
+
+            # Final envelope event
+            yield f"event: envelope\ndata: {json.dumps(result)}\n\n"
+
+            if self.chat_store:
+                safe_response = response.model_copy(
+                    update={"reply": result["reply"], "actions": result["actions"]}
+                )
+                await self._persist_turn(payload, safe_response, user_id, executed_tool_calls=executed_tool_calls)
+
     def handle_turn_sync(
         self,
         payload: Dict[str, Any],

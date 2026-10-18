@@ -2336,6 +2336,135 @@ def test_act_packaging_backend_exports():
     assert ChatStore is not None
 
 
+@pytest.mark.asyncio
+async def test_canary_in_streamed_delta_never_emitted():
+    """If the model response contains the canary, stream_turn fails with disclosure_blocked and emits no canary."""
+    from ghost_cursor import BRAIN_CANARY
+
+    def mock_handler(request):
+        return httpx.Response(200, json={
+            "protocolVersion": "1",
+            "runId": str(uuid.uuid4()),
+            "revision": 0,
+            "status": "completed",
+            "reply": f"Leaking canary: {BRAIN_CANARY} in response",
+            "questions": None,
+            "actions": None,
+        })
+
+    backend = GhostCursorBackend(api_key="test-key-shophive-demo-0123456789abcdef")
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Hello",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    emitted = []
+    with pytest.raises(GatewayError) as exc_info:
+        async for chunk in backend.stream_turn(payload, "user_123"):
+            emitted.append(chunk)
+
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "disclosure_blocked"
+    # Verify that the canary was never emitted in any chunk
+    all_emitted_text = "".join(emitted)
+    assert BRAIN_CANARY not in all_emitted_text
+    assert "event: status" in all_emitted_text
+    assert "event: delta" not in all_emitted_text
+    assert "event: envelope" not in all_emitted_text
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_emits_status_deltas_and_envelope():
+    """stream_turn streams status events (thinking, tool:..., planning), deltas, and final envelope."""
+    from ghost_cursor.proxy import loopback_key, sign_tool_batch
+    store = InMemoryChatStore()
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="shophive_demo",
+    )
+    backend.attach_chat_store(store)
+
+    @backend.register_tool(
+        name="lookup_order",
+        description="Lookup order status",
+        schema={"type": "object", "properties": {"order_id": {"type": "string"}}},
+    )
+    def lookup_order(order_id: str) -> dict:
+        return {"order_id": order_id, "status": "shipped"}
+
+    run_id = str(uuid.uuid4())
+    key = loopback_key("test-key-shophive-demo-0123456789abcdef")
+    tool_calls = [{"id": "call_1", "tool": "lookup_order", "parameters": {"order_id": "ORD-123"}}]
+    sig = sign_tool_batch(key, "shophive_demo", run_id, 0, tool_calls)
+
+    calls = 0
+    def mock_handler(request):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 0,
+                "status": "awaiting_tools",
+                "reply": "Looking up...",
+                "toolCalls": tool_calls,
+                "loopbackSignature": sig,
+            })
+        else:
+            return httpx.Response(200, json={
+                "protocolVersion": "1",
+                "runId": run_id,
+                "revision": 1,
+                "status": "completed",
+                "reply": "Your order ORD-123 has shipped.",
+                "actions": [{"type": "click", "targetId": "track_btn"}],
+            })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    session = await store.create_session("u_1", "shophive_demo", "Order check")
+    payload = {
+        "command": "start",
+        "protocolVersion": "1",
+        "requestId": str(uuid.uuid4()),
+        "sessionId": session.session_id,
+        "message": "Where is my order ORD-123?",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    events = []
+    async for chunk in backend.stream_turn(payload, "u_1"):
+        events.append(chunk)
+
+    all_output = "".join(events)
+    # 1. status: thinking
+    assert 'event: status\ndata: {"status": "thinking"}' in all_output
+    # 2. status: tool:lookup_order
+    assert 'event: status\ndata: {"status": "tool:lookup_order"}' in all_output
+    # 3. status: planning
+    assert 'event: status\ndata: {"status": "planning"}' in all_output
+    # 4. deltas
+    assert "event: delta" in all_output
+    assert "ORD-123" in all_output
+    # 5. envelope
+    assert "event: envelope" in all_output
+    assert '"status": "completed"' in all_output
+    assert '"actions": [{"type": "click", "targetId": "track_btn"}]' in all_output
+
+    # Check session updated
+    messages = await store.get_messages(session.session_id, "u_1")
+    assert len(messages) == 2
+    assert messages[1].role == "assistant"
+    assert messages[1].content == "Your order ORD-123 has shipped."
+
+
+
 
 
 

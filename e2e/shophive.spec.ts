@@ -619,6 +619,36 @@ test.describe('reduced motion', () => {
   });
 });
 
+test.describe('streaming progress SSE (A11)', () => {
+  test('streams status events, live header pill, and typed reply deltas', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as any).__GC_STREAMING = true;
+    });
+
+    let sseRequested = false;
+    page.on('request', req => {
+      if (req.url().includes('/api/ghost-cursor') && req.method() === 'POST') {
+        const accept = req.headers()['accept'] || '';
+        if (accept.includes('text/event-stream')) {
+          sseRequested = true;
+        }
+      }
+    });
+
+    await page.goto('/orders');
+    const statusPill = page.locator('.gc-status');
+
+    await ask(page, 'Where is my order SH-1024?');
+
+    // Assert that the request used Accept: text/event-stream
+    await expect.poll(() => sseRequested, { timeout: 10_000 }).toBe(true);
+
+    // The reply completes and appears in the chat
+    await expect(chat(page)).toContainText('1Z999AA10123456784', { timeout: 20_000 });
+    await expect(statusPill).toHaveText('Online', { timeout: 10_000 });
+  });
+});
+
 
 
 

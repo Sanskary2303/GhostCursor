@@ -20,6 +20,7 @@ export interface GhostCursorProps {
     include?: string[];
   };
   mount?: HTMLElement;
+  streaming?: boolean;
 }
 
 export interface Theme {

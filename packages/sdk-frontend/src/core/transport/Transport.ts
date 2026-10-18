@@ -8,6 +8,9 @@ import type { BrowserRequest, PublicResponse, ToolResult, Action } from '../type
 export interface TransportOptions {
   gatewayUrl: string;
   headers?: () => Record<string, string> | Promise<Record<string, string>>;
+  streaming?: boolean;
+  onStatus?: (status: string) => void;
+  onDelta?: (delta: string) => void;
   onMessage?: (response: PublicResponse) => void;
   onError?: (error: Error) => void;
   onClose?: () => void;
@@ -25,7 +28,7 @@ export interface Transport {
   off?(type: TransportEventType, listener: (event: TransportEvent) => void): void;
 }
 
-export type TransportEventType = 'open' | 'close' | 'error' | 'message';
+export type TransportEventType = 'open' | 'close' | 'error' | 'message' | 'status' | 'delta';
 
 export interface TransportEvent {
   type: TransportEventType;
@@ -50,6 +53,9 @@ export class WebSocketTransport implements Transport {
     this.options = {
       gatewayUrl: options.gatewayUrl,
       headers: options.headers || (() => ({ 'Content-Type': 'application/json' })),
+      streaming: options.streaming ?? false,
+      onStatus: options.onStatus || (() => {}),
+      onDelta: options.onDelta || (() => {}),
       onMessage: options.onMessage || (() => {}),
       onError: options.onError || (() => {}),
       onClose: options.onClose || (() => {}),
@@ -231,6 +237,9 @@ export class HttpTransport implements Transport {
     this.options = {
       gatewayUrl: options.gatewayUrl,
       headers: options.headers || (() => ({ 'Content-Type': 'application/json' })),
+      streaming: options.streaming ?? false,
+      onStatus: options.onStatus || (() => {}),
+      onDelta: options.onDelta || (() => {}),
       onMessage: options.onMessage || (() => {}),
       onError: options.onError || (() => {}),
       onClose: options.onClose || (() => {}),
@@ -239,7 +248,7 @@ export class HttpTransport implements Transport {
       maxReconnectAttempts: 0,
     };
 
-    for (const type of ['open', 'close', 'error', 'message'] as TransportEventType[]) {
+    for (const type of ['open', 'close', 'error', 'message', 'status', 'delta'] as TransportEventType[]) {
       this.eventListeners.set(type, new Set());
     }
   }
@@ -274,6 +283,103 @@ export class HttpTransport implements Transport {
 
   async connect(): Promise<void> { this.emit('open', { type: 'open' }); }
 
+  private async readEventStream(body: ReadableStream<Uint8Array>): Promise<void> {
+    const reader = body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let finalEnvelope: PublicResponse | null = null;
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          const trimmed = part.trim();
+          if (!trimmed) continue;
+
+          let eventType = 'message';
+          let dataStr = '';
+
+          for (const line of trimmed.split('\n')) {
+            if (line.startsWith('event:')) {
+              eventType = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              dataStr = line.slice(5).trim();
+            }
+          }
+
+          if (eventType === 'status') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              const st = typeof parsed === 'string' ? parsed : (parsed.status || parsed.text);
+              if (st) {
+                this.emit('status', { type: 'status', data: st, status: st } as any);
+                this.options.onStatus?.(st);
+              }
+            } catch {
+              this.emit('status', { type: 'status', data: dataStr, status: dataStr } as any);
+              this.options.onStatus?.(dataStr);
+            }
+          } else if (eventType === 'delta') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              const delta = typeof parsed === 'string' ? parsed : (parsed.delta ?? parsed.text);
+              if (delta) {
+                this.emit('delta', { type: 'delta', data: delta, delta } as any);
+                this.options.onDelta?.(delta);
+              }
+            } catch {
+              this.emit('delta', { type: 'delta', data: dataStr, delta: dataStr } as any);
+              this.options.onDelta?.(dataStr);
+            }
+          } else if (eventType === 'envelope') {
+            const data = JSON.parse(dataStr) as PublicResponse;
+            finalEnvelope = data;
+            this.emit('message', { type: 'message', data });
+            this.options.onMessage(data);
+          } else if (eventType === 'error') {
+            let errMsg = 'streaming_error';
+            try {
+              const parsed = JSON.parse(dataStr);
+              errMsg = parsed.error || errMsg;
+            } catch {
+              errMsg = dataStr || errMsg;
+            }
+            throw new Error(errMsg);
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        const trimmed = buffer.trim();
+        let eventType = 'message';
+        let dataStr = '';
+        for (const line of trimmed.split('\n')) {
+          if (line.startsWith('event:')) eventType = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataStr = line.slice(5).trim();
+        }
+        if (eventType === 'envelope' && dataStr) {
+          finalEnvelope = JSON.parse(dataStr) as PublicResponse;
+          this.emit('message', { type: 'message', data: finalEnvelope });
+          this.options.onMessage(finalEnvelope);
+        } else if (eventType === 'error') {
+          throw new Error(dataStr || 'streaming_error');
+        }
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    if (!finalEnvelope) {
+      throw new Error('Stream closed without envelope');
+    }
+  }
+
   async send(request: BrowserRequest): Promise<void> {
     if (this.isClosed) {
       throw new Error('Transport is closed');
@@ -283,13 +389,18 @@ export class HttpTransport implements Transport {
     this.abortControllers.add(controller);
 
     try {
-      const headers = await this.options.headers();
+      const customHeaders = await this.options.headers();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...customHeaders,
+      };
+      if (this.options.streaming) {
+        headers['Accept'] = 'text/event-stream';
+      }
+
       const response = await fetch(this.options.gatewayUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...headers,
-        },
+        headers,
         body: JSON.stringify(request),
         signal: controller.signal,
       });
@@ -300,9 +411,16 @@ export class HttpTransport implements Transport {
         throw new Error(code);
       }
 
-      const data = await response.json() as PublicResponse;
-      this.emit('message', { type: 'message', data });
-      this.options.onMessage(data);
+      const contentType = (response.headers && typeof response.headers.get === 'function')
+        ? (response.headers.get('content-type') || '')
+        : '';
+      if (contentType.includes('text/event-stream') && response.body) {
+        await this.readEventStream(response.body);
+      } else {
+        const data = await response.json() as PublicResponse;
+        this.emit('message', { type: 'message', data });
+        this.options.onMessage(data);
+      }
     } catch (error) {
       this.emit('error', { type: 'error', error: error as Error });
       this.options.onError(error as Error);
@@ -354,7 +472,12 @@ export class TransportManager {
     });
   }
 
-  async start(message: string, context: any, sessionId?: string): Promise<PublicResponse> {
+  async start(
+    message: string,
+    context: any,
+    sessionId?: string,
+    callbacks?: { onStatus?: (status: string) => void; onDelta?: (delta: string) => void }
+  ): Promise<PublicResponse> {
     const requestId = crypto.randomUUID();
 
     const request: BrowserRequest = {
@@ -370,24 +493,53 @@ export class TransportManager {
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        cleanup();
         reject(new Error('Request timeout'));
       }, 30000);
 
-      const off = this.transport.on('message', (event) => {
+      const offStatus = callbacks?.onStatus
+        ? this.transport.on('status', (e) => callbacks.onStatus!(e.data))
+        : null;
+      const offDelta = callbacks?.onDelta
+        ? this.transport.on('delta', (e) => callbacks.onDelta!(e.data))
+        : null;
+
+      const offMessage = this.transport.on('message', (event) => {
         if (event.data.runId) {
           this.runId = event.data.runId;
           this.revision = event.data.revision;
           clearTimeout(timeout);
-          off();
+          cleanup();
           resolve(event.data);
         }
       });
 
-      this.transport.send(request).catch(reject);
+      const offError = this.transport.on('error', (event) => {
+        clearTimeout(timeout);
+        cleanup();
+        reject(event.error || new Error('Transport error'));
+      });
+
+      const cleanup = () => {
+        offStatus?.();
+        offDelta?.();
+        offMessage();
+        offError();
+      };
+
+      this.transport.send(request).catch((err) => {
+        clearTimeout(timeout);
+        cleanup();
+        reject(err);
+      });
     });
   }
 
-  async continue(kind: 'actions' | 'answer' | 'cancel', payload: any): Promise<PublicResponse> {
+  async continue(
+    kind: 'actions' | 'answer' | 'cancel',
+    payload: any,
+    callbacks?: { onStatus?: (status: string) => void; onDelta?: (delta: string) => void }
+  ): Promise<PublicResponse> {
     if (!this.runId) {
       throw new Error('No active run');
     }
@@ -407,19 +559,44 @@ export class TransportManager {
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
+        cleanup();
         reject(new Error('Request timeout'));
       }, 30000);
 
-      const off = this.transport.on('message', (event) => {
+      const offStatus = callbacks?.onStatus
+        ? this.transport.on('status', (e) => callbacks.onStatus!(e.data))
+        : null;
+      const offDelta = callbacks?.onDelta
+        ? this.transport.on('delta', (e) => callbacks.onDelta!(e.data))
+        : null;
+
+      const offMessage = this.transport.on('message', (event) => {
         if (event.data.runId === this.runId && event.data.revision > this.revision) {
           this.revision = event.data.revision;
           clearTimeout(timeout);
-          off();
+          cleanup();
           resolve(event.data);
         }
       });
 
-      this.transport.send(request).catch(reject);
+      const offError = this.transport.on('error', (event) => {
+        clearTimeout(timeout);
+        cleanup();
+        reject(event.error || new Error('Transport error'));
+      });
+
+      const cleanup = () => {
+        offStatus?.();
+        offDelta?.();
+        offMessage();
+        offError();
+      };
+
+      this.transport.send(request).catch((err) => {
+        clearTimeout(timeout);
+        cleanup();
+        reject(err);
+      });
     });
   }
 

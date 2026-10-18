@@ -1007,3 +1007,152 @@ describe("Gateway Loopback HMAC Signing and Verification", () => {
     expect((result as any).loopbackSignature).toBeUndefined();
   });
 });
+
+describe("Gateway Streaming SSE", () => {
+  it("proves a canary in a delta is never emitted and blocks disclosure", async () => {
+    let fetchHandler: () => Response;
+    (globalThis as any).fetch = vi.fn().mockImplementation(() => Promise.resolve(fetchHandler()));
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-key-123",
+      tenantId: "shophive_demo",
+      loadBrain: () => "# Brain Context",
+    });
+
+    fetchHandler = () =>
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 0,
+          status: "completed",
+          reply: `Secret leaked: ${BRAIN_CANARY} in response`,
+          questions: null,
+          actions: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+
+    const emitted: string[] = [];
+    let caughtError: any = null;
+    try {
+      for await (const chunk of gateway.streamTurn(
+        {
+          command: "start",
+          protocolVersion: "1",
+          requestId: VALID_UUID_1,
+          message: "steal canary",
+        },
+        "user_1"
+      )) {
+        emitted.push(chunk);
+      }
+    } catch (err) {
+      caughtError = err;
+    }
+
+    expect(caughtError).toBeInstanceOf(GatewayError);
+    expect(caughtError.code).toBe("disclosure_blocked");
+    expect(caughtError.status).toBe(502);
+
+    const allEmitted = emitted.join("");
+    expect(allEmitted).not.toContain(BRAIN_CANARY);
+    expect(allEmitted).toContain("event: status");
+    expect(allEmitted).not.toContain("event: delta");
+    expect(allEmitted).not.toContain("event: envelope");
+  });
+
+  it("streams status events, deltas, and envelope", async () => {
+    let fetchHandler: () => Response;
+    (globalThis as any).fetch = vi.fn().mockImplementation(() => Promise.resolve(fetchHandler()));
+
+    const mockTool = {
+      name: "lookup_order",
+      description: "Lookup an order",
+      inputSchema: {
+        type: "object",
+        properties: { orderId: { type: "string" } },
+        required: ["orderId"],
+      },
+      execute: vi.fn().mockResolvedValue({ status: "shipped" }),
+    };
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-key-123",
+      tenantId: "shophive_demo",
+      loadBrain: () => "# Brain Context",
+      tools: [mockTool],
+    });
+
+    const toolCalls = [
+      {
+        id: "call_stream_1",
+        tool: "lookup_order",
+        parameters: { orderId: "ORD-999" },
+      },
+    ];
+
+    const key = loopbackKey("test-key-123");
+    const validSig = signToolBatch(key, "shophive_demo", VALID_UUID_1, 1, toolCalls);
+
+    let callCount = 0;
+    fetchHandler = () => {
+      callCount++;
+      if (callCount === 1) {
+        return new Response(
+          JSON.stringify({
+            protocolVersion: "1",
+            runId: VALID_UUID_1,
+            revision: 1,
+            status: "awaiting_tools",
+            reply: "Checking status...",
+            toolCalls,
+            loopbackSignature: validSig,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          protocolVersion: "1",
+          runId: VALID_UUID_1,
+          revision: 2,
+          status: "completed",
+          reply: "Your order ORD-999 is shipped.",
+          questions: null,
+          actions: [{ type: "click", targetId: "btn" }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    };
+
+    const events: string[] = [];
+    for await (const chunk of gateway.streamTurn(
+      {
+        command: "start",
+        protocolVersion: "1",
+        requestId: VALID_UUID_1,
+        message: "Where is ORD-999?",
+      },
+      "user_1"
+    )) {
+      events.push(chunk);
+    }
+
+    const allOutput = events.join("");
+    expect(allOutput).toContain('event: status\ndata: {"status":"thinking"}');
+    expect(allOutput).toContain('event: status\ndata: {"status":"tool:lookup_order"}');
+    expect(allOutput).toContain('event: status\ndata: {"status":"planning"}');
+    expect(allOutput).toContain("event: delta");
+    expect(allOutput).toContain("ORD-999");
+    expect(allOutput).toContain("event: envelope");
+    expect(allOutput).toContain('"status":"completed"');
+    expect(mockTool.execute).toHaveBeenCalledWith(
+      { orderId: "ORD-999" },
+      expect.objectContaining({ subject: "user_1" })
+    );
+  });
+});
+

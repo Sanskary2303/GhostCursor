@@ -1,3 +1,8 @@
+---
+owner: shophive
+version: "1.0"
+---
+
 # ShopHive Platform Overview
 
 ShopHive is a modern footwear store that sells premium sneakers and sportswear.

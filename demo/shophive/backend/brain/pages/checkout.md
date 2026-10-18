@@ -1,3 +1,12 @@
+---
+owner: shophive
+version: "1.0"
+suggestions:
+  - "What are the shipping options?"
+  - "Is express shipping available?"
+  - "Are payments SSL encrypted?"
+---
+
 # Checkout Page Context
 
 This page collects shipping information and payment details to complete an order.

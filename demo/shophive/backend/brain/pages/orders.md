@@ -1,3 +1,12 @@
+---
+owner: shophive
+version: "1.0"
+suggestions:
+  - "How do I track my order?"
+  - "What is the return policy?"
+  - "How long do refunds take?"
+---
+
 # Order Tracking and Returns
 
 Customers can track the progress of their purchases using their order ID.

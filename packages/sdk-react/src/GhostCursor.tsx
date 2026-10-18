@@ -44,6 +44,8 @@ export const GhostCursor: FC<GhostCursorProps> = (props) => {
       onMessage: (msg: any) => propsRef.current.onMessage?.(msg),
       onActionsRequested: (acts: any) => propsRef.current.onActionsRequested?.(acts),
       streaming: propsRef.current.streaming,
+      xray: initialProps.xray,
+      allowXrayParam: initialProps.allowXrayParam,
     });
 
     return () => {

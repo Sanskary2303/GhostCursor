@@ -34,6 +34,10 @@ export const WIDGET_CSS = `
 .gc-empty { margin: auto 0; padding: 20px; text-align: center; color: var(--gc-muted); font-size: 13px; line-height: 1.5; }
 .gc-empty-mark { display: inline-grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; background: var(--gc-dock-bg); margin-bottom: 10px; }
 .gc-empty-title { color: var(--gc-text); font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+.gc-suggestions { display: flex; flex-direction: column; gap: 8px; margin-top: 16px; align-items: stretch; }
+.gc-chip { display: block; width: 100%; text-align: left; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--gc-border); background: var(--gc-surface); color: var(--gc-text); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; transition: border-color .15s ease, background .15s ease; }
+.gc-chip:hover { border-color: var(--gc-accent); background: var(--gc-accent-soft); }
+.gc-chip:focus-visible { outline: 2px solid var(--gc-accent); outline-offset: 1px; }
 .gc-msg { display: flex; animation: ghost-fade-in .3s ease-out; }
 .gc-msg--user { justify-content: flex-end; }
 .gc-bubble { max-width: 85%; padding: 10px 14px; font-size: 14px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }

@@ -1,3 +1,12 @@
+---
+owner: shophive
+version: "1.0"
+suggestions:
+  - "Show me popular sneakers"
+  - "What is the return policy?"
+  - "Tell me about shipping options"
+---
+
 # Home Page and Catalog Overview
 
 Welcome to ShopHive, your premier destination for footwear and sportswear.

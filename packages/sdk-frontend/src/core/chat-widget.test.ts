@@ -616,6 +616,47 @@ describe('ChatWidget shell', () => {
     const labels = Array.from(barsCard!.querySelectorAll('.gc-bar-label')).map(el => el.textContent);
     expect(labels).toEqual(['Current', 'SAVE20']);
   });
+
+  it('renders suggestion chips in empty state and clicking sends message', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url: any) => {
+      if (String(url).includes('/suggestions')) {
+        return {
+          ok: true,
+          json: async () => ['What sizes are in stock?', 'Is shipping free?'],
+        } as any;
+      }
+      return { ok: false } as any;
+    });
+
+    const sendSpy = vi.fn().mockResolvedValue({ reply: 'Here are sizes', status: 'completed', runId: 'r', revision: 0 });
+    const { root } = mount({
+      onSendMessage: sendSpy,
+      getPage: () => 'products',
+    });
+
+    // Open chat
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+    await tick();
+
+    // Verify chips rendered
+    const chips = root.querySelectorAll('.gc-chip');
+    expect(chips.length).toBe(2);
+    expect(chips[0].textContent).toBe('What sizes are in stock?');
+    expect(chips[1].textContent).toBe('Is shipping free?');
+
+    // Click first chip
+    (chips[0] as HTMLButtonElement).click();
+    await tick();
+
+    expect(sendSpy).toHaveBeenCalledWith(
+      'What sizes are in stock?',
+      expect.anything(),
+      expect.anything(),
+    );
+
+    fetchSpy.mockRestore();
+  });
 });
 
 

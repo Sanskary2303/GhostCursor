@@ -162,6 +162,13 @@ def create_ghost_cursor_router(
                 headers={"Cache-Control": "no-store"},
             )
 
+    @router.get("/suggestions", response_model=List[str])
+    async def get_suggestions(page: Optional[str] = None):
+        """Get suggestions for current page from Brain front-matter"""
+        if not page:
+            return []
+        return backend.get_suggestions(page)
+
     @router.get("/sessions", response_model=List[SessionResponse])
     async def list_sessions(
         user_id: str = Depends(get_user_id),

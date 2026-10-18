@@ -69,6 +69,7 @@ export interface ChatWidgetProps {
   onClearPreview?: () => void;
   history?: HistoryProp;
   initialContext: any;
+  getPage?: () => string;
 }
 
 export interface ChatWidgetState {
@@ -91,6 +92,7 @@ export interface ChatWidgetState {
   askBubble: { text: string; top: number; left: number } | null;
   showSlashMenu: boolean;
   streamingStatus?: string | null;
+  suggestions?: string[];
 }
 
 function formatRelativeTime(dateStr?: string): string {
@@ -129,6 +131,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
     hasRehydrated: false,
     askBubble: null,
     showSlashMenu: false,
+    suggestions: [] as string[],
   };
 
   private messagesEndRef = createRef<HTMLDivElement>();
@@ -146,6 +149,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   componentDidMount() {
     this.scrollToBottom();
     this.setupResizeListener();
+    void this.loadSuggestions();
     window.addEventListener('keydown', this.handleKeyDown);
     if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
       document.addEventListener('selectionchange', this.handleSelectionChange);
@@ -169,11 +173,49 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       if (this.state.unreadCount > 0) {
         this.setState({ unreadCount: 0 });
       }
+      void this.loadSuggestions();
       setTimeout(() => {
         this.inputRef.current?.focus();
       }, 50);
     }
   }
+
+  private resolveCurrentPage = (): string => {
+    if (this.props.getPage) {
+      try {
+        const p = this.props.getPage();
+        if (p) return p;
+      } catch {}
+    }
+    if (this.state.context?.page) return this.state.context.page;
+    if (typeof window !== 'undefined') {
+      const path = window.location.pathname.replace(/^\//, '');
+      return path || 'home';
+    }
+    return 'home';
+  };
+
+  private loadSuggestions = async () => {
+    try {
+      const page = this.resolveCurrentPage();
+      if (!page) {
+        this.setState({ suggestions: [] });
+        return;
+      }
+      const base = (this.props.apiEndpoint || '/api/ghost-cursor').replace(/\/+$/, '');
+      const res = await fetch(`${base}/suggestions?page=${encodeURIComponent(page)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (Array.isArray(data)) {
+          this.setState({ suggestions: data });
+        }
+      }
+    } catch {
+      // Ignore network errors
+    }
+  };
 
   private setupResizeListener() {
     window.addEventListener('resize', this.handleResize);
@@ -312,6 +354,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
       error: null,
       hasRehydrated: false,
     });
+    void this.loadSuggestions();
   };
 
   private handleSelectSession = async (sessionId: string) => {
@@ -884,6 +927,20 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                   <div className="gc-empty-mark"><BrandCursor width={26} accent={this.tokens.accent} /></div>
                   <div className="gc-empty-title">How can I help?</div>
                   <div>Ask me to find products, add to cart, change settings or show you around.</div>
+                  {this.state.suggestions && this.state.suggestions.length > 0 && (
+                    <div className="gc-suggestions" role="group" aria-label="Suggested questions">
+                      {this.state.suggestions.map((suggestion, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          className="gc-chip"
+                          onClick={() => this.handleSendMessage(undefined, suggestion)}
+                        >
+                          {suggestion}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ) : (
                 messages.map(message => (

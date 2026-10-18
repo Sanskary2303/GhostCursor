@@ -13,6 +13,7 @@ import type { ThemeMode } from './theme/tokens';
 import { describeAction } from './chat/describe';
 import { createHistoryClient } from './history';
 import { defineGhostCursorElement } from './element';
+import { initXray } from './xray';
 
 const SESSION_STORAGE_KEY = 'ghost-cursor.session';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -66,6 +67,8 @@ export interface CreateGhostCursorOptions {
   transport?: 'http' | 'websocket';
   allowSemanticLookup?: boolean;
   streaming?: boolean;
+  xray?: boolean;
+  allowXrayParam?: boolean;
   onMessage?: (message: Message) => void;
   onActionsRequested?: (actions: Action[]) => void;
   onContextChange?: (context: PageContext) => void;
@@ -337,6 +340,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       theme: mergedTheme,
       bridge: widgetBridge,
       requireApprovalForActions,
+      getPage,
       initialContext: { page: getPage(), values: {}, availableTargets: [] },
       history: {
         list: () => historyClient.list(),
@@ -545,6 +549,7 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     if (isDisposed) return;
     isDisposed = true;
 
+    xrayInstance?.dispose();
     contextProvider.destroy();
     transportManager.close();
     actionExecutor.dispose();
@@ -559,6 +564,11 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
   }
 
   // Initialize
+  const xrayInstance = initXray({
+    xray: options.xray,
+    allowXrayParam: options.allowXrayParam,
+    targets,
+  });
   contextProvider.start();
   transport.connect().catch(err => console.error('[GhostCursor] Initial connection failed:', err));
 
@@ -585,3 +595,4 @@ export * from './chat/ChatWidget';
 export * from './context/ContextProvider';
 export * from './transport/Transport';
 export * from './element';
+export * from './xray';

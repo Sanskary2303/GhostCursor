@@ -21,6 +21,8 @@ export interface GhostCursorProps {
   };
   mount?: HTMLElement;
   streaming?: boolean;
+  xray?: boolean;
+  allowXrayParam?: boolean;
 }
 
 export interface Theme {

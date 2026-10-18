@@ -414,6 +414,12 @@ class GhostCursorBackend:
         """Attach a chat store for conversation persistence"""
         self.chat_store = chat_store
 
+    def get_suggestions(self, page: Optional[str] = None) -> List[str]:
+        """Get suggestions for current page from Brain front-matter"""
+        if not page:
+            return []
+        return self.brain_loader.get_suggestions(page)
+
     def register_tool(
         self,
         name: str,

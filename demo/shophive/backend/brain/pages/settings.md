@@ -1,3 +1,12 @@
+---
+owner: shophive
+version: "1.0"
+suggestions:
+  - "Switch to dark mode"
+  - "How many addresses can I save?"
+  - "How do I turn on two-factor auth?"
+---
+
 # Settings Page Context
 
 This page manages user preferences and notification settings.

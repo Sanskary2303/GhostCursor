@@ -1,3 +1,12 @@
+---
+owner: shophive
+version: "1.0"
+suggestions:
+  - "What sizes are in stock?"
+  - "Is there a student discount?"
+  - "How do I care for leather upper shoes?"
+---
+
 # Product Detail Page Context
 
 This page displays individual product information including sizes, colors, and pricing.

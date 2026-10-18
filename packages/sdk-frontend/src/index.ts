@@ -4,6 +4,8 @@
 export { createGhostCursor } from './core/SDK';
 export type { GhostCursorSDK, CreateGhostCursorOptions } from './core/SDK';
 export { defineGhostCursorElement } from './core/element';
+export { initXray, isXrayEnabled } from './core/xray';
+export type { XrayOptions, XrayInstance } from './core/xray';
 
 // Core types
 export * from './core/types';

@@ -30,6 +30,7 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0.0",
     "python-dotenv>=1.0.0",
     "jsonschema>=4.20.0",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]

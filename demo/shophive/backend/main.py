@@ -244,6 +244,13 @@ async def handle_ghost_turn(request: Request, user_id: str = Depends(require_use
             headers={"Cache-Control": "no-store"},
         )
 
+@ghost_router.get("/suggestions")
+async def get_suggestions(page: str = None):
+    """Return suggestion chips for current page"""
+    if not page:
+        return []
+    return ghost.get_suggestions(page)
+
 SESSION_ID = re.compile(r"^[0-9a-fA-F-]{36}$")
 
 

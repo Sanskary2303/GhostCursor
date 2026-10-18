@@ -706,6 +706,16 @@ test('insight cards: asking "Simulate SAVE20 margin" shows a metric card plus a 
   await expect(panel.locator('.gc-bar-label').filter({ hasText: 'SAVE20' })).toBeVisible();
 });
 
+test('suggestion chips: opening chat on product page displays chip and clicking sends it', async ({ page }) => {
+  await page.goto('/product/air-max-90');
+  const launcher = page.getByRole('button', { name: 'Open Ghost Cursor chat' });
+  await launcher.click();
+  const chip = page.getByRole('button', { name: 'What sizes are in stock?' });
+  await expect(chip).toBeVisible({ timeout: 10_000 });
+  await chip.click();
+  await expect(chat(page)).toContainText('units', { timeout: 20_000 });
+});
+
 
 
 

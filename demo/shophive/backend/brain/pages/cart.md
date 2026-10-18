@@ -1,3 +1,12 @@
+---
+owner: shophive
+version: "1.0"
+suggestions:
+  - "Do you have a discount code?"
+  - "What is the return policy?"
+  - "Is shipping free over $75?"
+---
+
 # Shopping Cart Information
 
 The shopping cart displays all items currently selected for purchase along with quantities, sizes, and pricing.

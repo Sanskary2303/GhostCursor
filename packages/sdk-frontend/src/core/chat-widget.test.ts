@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { h, render } from 'preact';
-import { ChatWidget, type ChatWidgetProps, ActionApprovalPanel } from './chat/ChatWidget';
+import { ChatWidget, type ChatWidgetProps, ActionApprovalPanel, createBarsSvg } from './chat/ChatWidget';
 import { createBridge, type Bridge, INITIAL_WIDGET_STATE, type WidgetBridgeState } from './bridge';
 import { registerTarget, clearTargetRegistry } from './dom-utils';
 
@@ -529,6 +529,94 @@ describe('ChatWidget shell', () => {
     plan.dispatchEvent(new Event('mouseleave'));
     expect(onClearPreview).toHaveBeenCalled();
   });
+
+  it('renders SVG bar chart with createElementNS and sets textContent', () => {
+    const barsCard = {
+      type: 'bars' as const,
+      series: [
+        { label: 'Current', value: 30 },
+        { label: 'SAVE20', value: 25 },
+        { label: 'Break-even Vol', value: 14.5 },
+      ],
+    };
+
+    const svg = createBarsSvg(barsCard);
+    expect(svg.namespaceURI).toBe('http://www.w3.org/2000/svg');
+    expect(svg.getAttribute('viewBox')).toBe('0 0 280 120');
+
+    const rects = svg.querySelectorAll('rect.gc-bar-rect');
+    expect(rects).toHaveLength(3);
+
+    const valTexts = svg.querySelectorAll('text.gc-bar-val');
+    expect(valTexts).toHaveLength(3);
+    expect(valTexts[0].textContent).toBe('30');
+    expect(valTexts[1].textContent).toBe('25');
+    expect(valTexts[2].textContent).toBe('14.5');
+
+    const labelTexts = svg.querySelectorAll('text.gc-bar-label');
+    expect(labelTexts).toHaveLength(3);
+    expect(labelTexts[0].textContent).toBe('Current');
+    expect(labelTexts[1].textContent).toBe('SAVE20');
+    expect(labelTexts[2].textContent).toBe('Break-even Vol');
+  });
+
+  it('renders metric and bars cards in chat widget response', async () => {
+    const { root } = mount({
+      onSendMessage: async () => ({
+        reply: 'Here is your simulated margin analysis.',
+        status: 'completed',
+        runId: 'r_sim',
+        revision: 1,
+        cards: [
+          {
+            type: 'metric',
+            label: 'Projected Margin',
+            value: '25%',
+            delta: '-5%',
+          },
+          {
+            type: 'bars',
+            series: [
+              { label: 'Current', value: 30 },
+              { label: 'SAVE20', value: 25 },
+            ],
+          },
+        ],
+      }),
+    });
+
+    (root.querySelector('#gc-launcher') as HTMLButtonElement).click();
+    await tick();
+
+    const textarea = root.querySelector('textarea.gc-input') as HTMLTextAreaElement;
+    textarea.value = 'Simulate SAVE20 margin';
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick();
+
+    const form = root.querySelector('form.gc-composer') as HTMLFormElement;
+    form.dispatchEvent(new Event('submit', { cancelable: true }));
+
+    await tick();
+    await tick();
+    await tick();
+
+    // Verify insight cards rendered
+    const cardsContainer = root.querySelector('.gc-insight-cards');
+    expect(cardsContainer).not.toBeNull();
+
+    const metricCard = root.querySelector('.gc-metric-card');
+    expect(metricCard).not.toBeNull();
+    expect(metricCard!.querySelector('.gc-metric-label')!.textContent).toBe('Projected Margin');
+    expect(metricCard!.querySelector('.gc-metric-value')!.textContent).toBe('25%');
+    expect(metricCard!.querySelector('.gc-metric-delta')!.textContent).toBe('-5%');
+
+    const barsCard = root.querySelector('.gc-bars-card');
+    expect(barsCard).not.toBeNull();
+    expect(barsCard!.querySelector('svg.gc-bars-svg')).not.toBeNull();
+    const labels = Array.from(barsCard!.querySelectorAll('.gc-bar-label')).map(el => el.textContent);
+    expect(labels).toEqual(['Current', 'SAVE20']);
+  });
 });
+
 
 

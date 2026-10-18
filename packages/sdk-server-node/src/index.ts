@@ -14,6 +14,10 @@ import {
   BrowserResult,
   GatewayError,
   PublicResponse,
+  MetricCard,
+  BarSeriesItem,
+  BarsCard,
+  InsightCard,
   validateBrowserRequest,
   validatePublicResponse,
 } from "./validate.js";
@@ -26,6 +30,10 @@ export {
   BrowserResult,
   GatewayError,
   PublicResponse,
+  MetricCard,
+  BarSeriesItem,
+  BarsCard,
+  InsightCard,
   validateBrowserRequest,
   validatePublicResponse,
 };
@@ -411,6 +419,7 @@ export class Gateway {
     const MAX_TOOL_OUTPUT_LENGTH = 16000;
 
     let rounds = 0;
+    const collectedCards: InsightCard[] = [];
     while (hostedResponse.toolCalls && hostedResponse.toolCalls.length > 0 && rounds < MAX_TOOL_ROUNDS) {
       rounds++;
       const toolCalls = hostedResponse.toolCalls;
@@ -469,6 +478,13 @@ export class Gateway {
             const output = await Promise.race([Promise.resolve(tool.execute(args, ctx)), timeout]);
 
             let outVal = output;
+            if (outVal && typeof outVal === "object" && Array.isArray((outVal as any).cards)) {
+              for (const c of (outVal as any).cards) {
+                if (collectedCards.length < 3) {
+                  collectedCards.push(c);
+                }
+              }
+            }
             const serialized = JSON.stringify(output);
             if (serialized && serialized.length > MAX_TOOL_OUTPUT_LENGTH) {
               outVal = { truncated: true, message: "Output exceeded 16KB limit" };
@@ -491,7 +507,7 @@ export class Gateway {
       }
 
       const continuePayload = {
-        protocolVersion: "1",
+        protocolVersion: req.protocolVersion,
         eventId: randomUUID(),
         revision: hostedResponse.revision,
         kind: "tools",
@@ -514,7 +530,7 @@ export class Gateway {
     }
 
     let publicResp: PublicResponse = {
-      protocolVersion: "1",
+      protocolVersion: (hostedResponse.protocolVersion === "1.1" || req.protocolVersion === "1.1") ? "1.1" : (hostedResponse.protocolVersion as any || "1.1"),
       runId: hostedResponse.runId,
       revision: hostedResponse.revision,
       status: hostedResponse.status as any,
@@ -522,6 +538,11 @@ export class Gateway {
       questions: hostedResponse.questions ?? null,
       actions: hostedResponse.actions ?? null,
     };
+    if (collectedCards.length > 0) {
+      publicResp.cards = collectedCards;
+    } else if ((hostedResponse as any).cards && Array.isArray((hostedResponse as any).cards)) {
+      publicResp.cards = (hostedResponse as any).cards.slice(0, 3);
+    }
 
     if (this.filterResponse) {
       try {
@@ -584,6 +605,7 @@ export class Gateway {
     const MAX_TOOL_OUTPUT_LENGTH = 16000;
 
     let rounds = 0;
+    const collectedCards: InsightCard[] = [];
     while (hostedResponse.toolCalls && hostedResponse.toolCalls.length > 0 && rounds < MAX_TOOL_ROUNDS) {
       rounds++;
       const toolCalls = hostedResponse.toolCalls;
@@ -636,6 +658,13 @@ export class Gateway {
           try {
             const output = await Promise.race([Promise.resolve(tool.execute(args, ctx)), timeout]);
             let outVal = output;
+            if (outVal && typeof outVal === "object" && Array.isArray((outVal as any).cards)) {
+              for (const c of (outVal as any).cards) {
+                if (collectedCards.length < 3) {
+                  collectedCards.push(c);
+                }
+              }
+            }
             const serialized = JSON.stringify(output);
             if (serialized && serialized.length > MAX_TOOL_OUTPUT_LENGTH) {
               outVal = { truncated: true, message: "Output exceeded 16KB limit" };
@@ -650,7 +679,7 @@ export class Gateway {
       }
 
       const continuePayload = {
-        protocolVersion: "1",
+        protocolVersion: req.protocolVersion,
         eventId: randomUUID(),
         revision: hostedResponse.revision,
         kind: "tools",
@@ -674,7 +703,7 @@ export class Gateway {
     }
 
     let publicResp: PublicResponse = {
-      protocolVersion: "1",
+      protocolVersion: (hostedResponse.protocolVersion === "1.1" || req.protocolVersion === "1.1") ? "1.1" : (hostedResponse.protocolVersion as any || "1.1"),
       runId: hostedResponse.runId,
       revision: hostedResponse.revision,
       status: hostedResponse.status as any,
@@ -682,6 +711,11 @@ export class Gateway {
       questions: hostedResponse.questions ?? null,
       actions: hostedResponse.actions ?? null,
     };
+    if (collectedCards.length > 0) {
+      publicResp.cards = collectedCards;
+    } else if ((hostedResponse as any).cards && Array.isArray((hostedResponse as any).cards)) {
+      publicResp.cards = (hostedResponse as any).cards.slice(0, 3);
+    }
 
     if (this.filterResponse) {
       try {

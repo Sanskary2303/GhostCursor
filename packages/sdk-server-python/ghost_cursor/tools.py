@@ -156,7 +156,11 @@ class BackendTool(Tool):
         except Exception:
             pass
 
-        if num_params == 1:
+        if num_params == 0:
+            if asyncio.iscoroutinefunction(fn):
+                return await fn()
+            return fn()
+        elif num_params == 1:
             if asyncio.iscoroutinefunction(fn):
                 return await fn(first_arg)
             return fn(first_arg)

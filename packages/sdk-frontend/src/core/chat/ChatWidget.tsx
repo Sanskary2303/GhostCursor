@@ -10,7 +10,7 @@ import { WIDGET_CSS } from './widgetStyles';
 import { BRAND } from '../cursor/assets';
 import { prefersDarkScheme, resolveMode, tokensFor, tokensToCss } from '../theme/tokens';
 import { ACTION_ICONS, describeAction } from './describe';
-import type { Action } from '../types';
+import type { Action, InsightCard, MetricCard, BarsCard } from '../types';
 import { getRegisteredTarget } from '../dom-utils';
 import { INITIAL_WIDGET_STATE } from '../bridge';
 import type { Bridge, WidgetBridgeState } from '../bridge';
@@ -46,6 +46,7 @@ export interface Message {
   questions?: { question: string; options: string[] }[];
   isStreaming?: boolean;
   card?: RunCard;
+  cards?: InsightCard[];
 }
 
 export interface ChatWidgetProps {
@@ -398,6 +399,7 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
             content: response.reply,
             isStreaming: false,
             questions: response.questions?.length ? response.questions : undefined,
+            cards: response.cards?.length ? response.cards : undefined,
             ...(card ? { card } : {}),
           }
         : m),
@@ -1025,6 +1027,92 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
   }
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+export function createBarsSvg(card: BarsCard): SVGSVGElement {
+  const series = card.series || [];
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 280 120');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '120');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', 'Bar chart');
+  svg.setAttribute('class', 'gc-bars-svg');
+
+  if (series.length === 0) return svg;
+
+  const maxVal = Math.max(...series.map(s => Math.abs(s.value)), 1);
+  const chartHeight = 65;
+  const bottomY = 85;
+  const n = series.length;
+  const barWidth = Math.max(16, Math.min(36, Math.floor(220 / n) - 8));
+  const totalBarsWidth = n * barWidth;
+  const gap = Math.max(6, Math.floor((260 - totalBarsWidth) / (n + 1)));
+
+  series.forEach((item, i) => {
+    const x = 10 + gap + i * (barWidth + gap);
+    const height = Math.max(4, Math.round((Math.abs(item.value) / maxVal) * chartHeight));
+    const y = bottomY - height;
+
+    // Bar rect
+    const rect = document.createElementNS(SVG_NS, 'rect');
+    rect.setAttribute('x', String(x));
+    rect.setAttribute('y', String(y));
+    rect.setAttribute('width', String(barWidth));
+    rect.setAttribute('height', String(height));
+    rect.setAttribute('rx', '4');
+    rect.setAttribute('class', 'gc-bar-rect');
+    svg.appendChild(rect);
+
+    // Value text above bar
+    const valText = document.createElementNS(SVG_NS, 'text');
+    valText.setAttribute('x', String(x + barWidth / 2));
+    valText.setAttribute('y', String(Math.max(12, y - 4)));
+    valText.setAttribute('text-anchor', 'middle');
+    valText.setAttribute('class', 'gc-bar-val');
+    valText.textContent = String(item.value);
+    svg.appendChild(valText);
+
+    // Label text below bar
+    const labelText = document.createElementNS(SVG_NS, 'text');
+    labelText.setAttribute('x', String(x + barWidth / 2));
+    labelText.setAttribute('y', String(bottomY + 16));
+    labelText.setAttribute('text-anchor', 'middle');
+    labelText.setAttribute('class', 'gc-bar-label');
+    labelText.textContent = item.label;
+    svg.appendChild(labelText);
+  });
+
+  return svg;
+}
+
+export const BarsCardView = ({ card }: { card: BarsCard }) => {
+  const mountRef = (container: HTMLDivElement | null) => {
+    if (container) {
+      container.innerHTML = '';
+      container.appendChild(createBarsSvg(card));
+    }
+  };
+  return <div ref={mountRef} className="gc-insight-card gc-bars-card" />;
+};
+
+export const MetricCardView = ({ card }: { card: MetricCard }) => {
+  return (
+    <div className="gc-insight-card gc-metric-card">
+      <div className="gc-metric-label" ref={el => { if (el) el.textContent = card.label; }} />
+      <div className="gc-metric-row">
+        <span className="gc-metric-value" ref={el => { if (el) el.textContent = String(card.value); }} />
+        {card.delta !== undefined && (
+          <span
+            className={`gc-metric-delta ${String(card.delta).startsWith('-') ? 'gc-metric-delta--neg' : 'gc-metric-delta--pos'}`}
+            ref={el => { if (el) el.textContent = String(card.delta); }}
+          />
+        )}
+      </div>
+    </div>
+  );
+};
+
 interface MessageBubbleProps {
   message: Message;
   theme?: ChatWidgetProps['theme'];
@@ -1049,6 +1137,18 @@ const MessageBubble = ({ message, onOptionSelect, onRetry, onShowMe }: MessageBu
             {message.questions.flatMap(q => q.options.map(opt => (
               <button key={opt} type="button" className="gc-option" onClick={() => onOptionSelect(opt)}>{opt}</button>
             )))}
+          </div>
+        )}
+        {message.cards && message.cards.length > 0 && (
+          <div className="gc-insight-cards">
+            {message.cards.map((c, idx) => {
+              if (c.type === 'metric') {
+                return <MetricCardView key={idx} card={c} />;
+              } else if (c.type === 'bars') {
+                return <BarsCardView key={idx} card={c} />;
+              }
+              return null;
+            })}
           </div>
         )}
         {card && (

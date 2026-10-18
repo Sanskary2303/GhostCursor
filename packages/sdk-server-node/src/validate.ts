@@ -24,7 +24,7 @@ export interface BrowserContext {
 
 export interface BrowserStart {
   command: "start";
-  protocolVersion: "1";
+  protocolVersion: "1" | "1.1";
   requestId: string;
   sessionId?: string;
   message: string;
@@ -40,7 +40,7 @@ export interface BrowserResult {
 
 export interface BrowserContinue {
   command: "continue";
-  protocolVersion: "1";
+  protocolVersion: "1" | "1.1";
   runId: string;
   eventId: string;
   revision: number;
@@ -52,14 +52,34 @@ export interface BrowserContinue {
 
 export type BrowserRequest = BrowserStart | BrowserContinue;
 
+export interface MetricCard {
+  type: "metric";
+  label: string;
+  value: string | number;
+  delta?: string | number;
+}
+
+export interface BarSeriesItem {
+  label: string;
+  value: number;
+}
+
+export interface BarsCard {
+  type: "bars";
+  series: BarSeriesItem[];
+}
+
+export type InsightCard = MetricCard | BarsCard;
+
 export interface PublicResponse {
-  protocolVersion: "1";
+  protocolVersion: "1" | "1.1";
   runId: string;
   revision: number;
   status: "awaiting_actions" | "awaiting_answer" | "completed" | "failed" | "cancelled";
   reply: string;
   questions?: Array<Record<string, any>> | null;
   actions?: Array<Record<string, any>> | null;
+  cards?: InsightCard[] | null;
 }
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -171,7 +191,7 @@ export function validateBrowserRequest(rawBody: unknown): BrowserRequest {
   if (command === "start") {
     assertAllowedKeys(rawBody, START_ALLOWED_KEYS);
 
-    if (rawBody.protocolVersion !== undefined && rawBody.protocolVersion !== "1") {
+    if (rawBody.protocolVersion !== undefined && rawBody.protocolVersion !== "1" && rawBody.protocolVersion !== "1.1") {
       throw new GatewayError(400, "invalid_request");
     }
 
@@ -198,7 +218,7 @@ export function validateBrowserRequest(rawBody: unknown): BrowserRequest {
 
     return {
       command: "start",
-      protocolVersion: "1",
+      protocolVersion: rawBody.protocolVersion ?? "1.1",
       requestId: rawBody.requestId,
       sessionId: rawBody.sessionId,
       message: rawBody.message,
@@ -209,7 +229,7 @@ export function validateBrowserRequest(rawBody: unknown): BrowserRequest {
   if (command === "continue") {
     assertAllowedKeys(rawBody, CONTINUE_ALLOWED_KEYS);
 
-    if (rawBody.protocolVersion !== undefined && rawBody.protocolVersion !== "1") {
+    if (rawBody.protocolVersion !== undefined && rawBody.protocolVersion !== "1" && rawBody.protocolVersion !== "1.1") {
       throw new GatewayError(400, "invalid_request");
     }
 
@@ -275,7 +295,7 @@ export function validateBrowserRequest(rawBody: unknown): BrowserRequest {
 
     return {
       command: "continue",
-      protocolVersion: "1",
+      protocolVersion: rawBody.protocolVersion ?? "1.1",
       runId: rawBody.runId,
       eventId: rawBody.eventId,
       revision: rawBody.revision,
@@ -297,6 +317,7 @@ const PUBLIC_ALLOWED_KEYS = new Set([
   "reply",
   "questions",
   "actions",
+  "cards",
 ]);
 
 const ALLOWED_STATUSES = new Set([
@@ -314,7 +335,7 @@ export function validatePublicResponse(resp: unknown): PublicResponse {
 
   assertAllowedKeys(resp, PUBLIC_ALLOWED_KEYS, 502, "bad_public_response");
 
-  if (resp.protocolVersion !== "1") {
+  if (resp.protocolVersion !== "1" && resp.protocolVersion !== "1.1") {
     throw new GatewayError(502, "bad_public_response");
   }
 
@@ -346,8 +367,55 @@ export function validatePublicResponse(resp: unknown): PublicResponse {
     throw new GatewayError(502, "bad_public_response");
   }
 
-  return {
-    protocolVersion: "1",
+  let cards: InsightCard[] | undefined = undefined;
+  if (resp.cards !== undefined && resp.cards !== null) {
+    if (!Array.isArray(resp.cards) || resp.cards.length > 3) {
+      throw new GatewayError(502, "bad_public_response");
+    }
+    cards = [];
+    for (const card of resp.cards) {
+      if (!isPlainObject(card)) {
+        throw new GatewayError(502, "bad_public_response");
+      }
+      if (card.type === "metric") {
+        assertAllowedKeys(card, new Set(["type", "label", "value", "delta"]), 502, "bad_public_response");
+        if (typeof card.label !== "string" || (typeof card.value !== "string" && (typeof card.value !== "number" || isNaN(card.value)))) {
+          throw new GatewayError(502, "bad_public_response");
+        }
+        if (card.delta !== undefined && typeof card.delta !== "string" && (typeof card.delta !== "number" || isNaN(card.delta))) {
+          throw new GatewayError(502, "bad_public_response");
+        }
+        cards.push({
+          type: "metric",
+          label: card.label,
+          value: card.value,
+          ...(card.delta !== undefined ? { delta: card.delta } : {}),
+        });
+      } else if (card.type === "bars") {
+        assertAllowedKeys(card, new Set(["type", "series"]), 502, "bad_public_response");
+        if (!Array.isArray(card.series) || card.series.length > 8) {
+          throw new GatewayError(502, "bad_public_response");
+        }
+        const series: BarSeriesItem[] = [];
+        for (const item of card.series) {
+          if (!isPlainObject(item)) {
+            throw new GatewayError(502, "bad_public_response");
+          }
+          assertAllowedKeys(item, new Set(["label", "value"]), 502, "bad_public_response");
+          if (typeof item.label !== "string" || typeof item.value !== "number" || isNaN(item.value)) {
+            throw new GatewayError(502, "bad_public_response");
+          }
+          series.push({ label: item.label, value: item.value });
+        }
+        cards.push({ type: "bars", series });
+      } else {
+        throw new GatewayError(502, "bad_public_response");
+      }
+    }
+  }
+
+  const result: PublicResponse = {
+    protocolVersion: resp.protocolVersion === "1" ? "1" : "1.1",
     runId: resp.runId,
     revision: resp.revision,
     status: resp.status,
@@ -355,5 +423,9 @@ export function validatePublicResponse(resp: unknown): PublicResponse {
     questions: resp.questions ?? null,
     actions: resp.actions ?? null,
   };
+  if (cards !== undefined) {
+    result.cards = cards;
+  }
+  return result;
 }
 

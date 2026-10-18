@@ -133,7 +133,7 @@ describe("Gateway Request Validation", () => {
 });
 
 describe("Gateway Execution and Error Handling", () => {
-  it("handles start -> completed lifecycle with 7 public keys", async () => {
+  it("handles start -> completed lifecycle with 7 public keys (or 8 with optional cards)", async () => {
     const mockFetch = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -191,6 +191,135 @@ describe("Gateway Execution and Error Handling", () => {
       actions: null,
     });
     expect((result as any).privateInternalField).toBeUndefined();
+  });
+
+  it("allows cards as the 8th key in public response and rejects invalid cards", async () => {
+    const validCards = [
+      { type: "metric", label: "Projected Margin", value: "28%", delta: "-2%" },
+      { type: "bars", series: [{ label: "Current", value: 30 }, { label: "SAVE20", value: 28 }] },
+    ];
+
+    const mockFetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          protocolVersion: "1.1",
+          runId: VALID_UUID_1,
+          revision: 0,
+          status: "completed",
+          reply: "Margin simulation complete",
+          questions: null,
+          actions: null,
+          cards: validCards,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+
+    const gateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-secret-key",
+      tenantId: "shophive_demo",
+      loadBrain: async () => "# Rules",
+      fetch: mockFetch,
+    });
+
+    const result = await gateway.handle("user_100", {
+      command: "start",
+      protocolVersion: "1.1",
+      requestId: VALID_UUID_2,
+      message: "Simulate SAVE20 margin",
+    });
+
+    expect(result.protocolVersion).toBe("1.1");
+    expect(result.cards).toEqual(validCards);
+    expect(Object.keys(result)).toEqual([
+      "protocolVersion",
+      "runId",
+      "revision",
+      "status",
+      "reply",
+      "questions",
+      "actions",
+      "cards",
+    ]);
+
+    // Rejects invalid card structure
+    const badGateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-secret-key",
+      tenantId: "shophive_demo",
+      loadBrain: async () => "# Rules",
+      fetch: vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            protocolVersion: "1.1",
+            runId: VALID_UUID_1,
+            revision: 0,
+            status: "completed",
+            reply: "Bad cards",
+            questions: null,
+            actions: null,
+            cards: [{ type: "unsupported_card_type" }],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(
+      badGateway.handle("user_100", {
+        command: "start",
+        protocolVersion: "1.1",
+        requestId: VALID_UUID_2,
+        message: "Test bad card",
+      }),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "bad_public_response",
+    });
+
+    // Filter returning > 3 cards throws 502 bad_public_response
+    const badFilterGateway = new Gateway({
+      serviceUrl: "http://localhost:8080",
+      serviceKey: "test-secret-key",
+      tenantId: "shophive_demo",
+      loadBrain: async () => "# Rules",
+      filterResponse: async (resp) => ({
+        ...resp,
+        cards: [
+          { type: "metric", label: "1", value: 1 },
+          { type: "metric", label: "2", value: 2 },
+          { type: "metric", label: "3", value: 3 },
+          { type: "metric", label: "4", value: 4 },
+        ] as any,
+      }),
+      fetch: vi.fn().mockImplementation(() =>
+        new Response(
+          JSON.stringify({
+            protocolVersion: "1.1",
+            runId: VALID_UUID_1,
+            revision: 0,
+            status: "completed",
+            reply: "OK",
+            questions: null,
+            actions: null,
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    });
+
+    await expect(
+      badFilterGateway.handle("user_100", {
+        command: "start",
+        protocolVersion: "1.1",
+        requestId: VALID_UUID_2,
+        message: "Test filter > 3 cards",
+      }),
+    ).rejects.toMatchObject({
+      status: 502,
+      code: "bad_public_response",
+    });
   });
 
   it("handles the tool loop via Gateway Loopback", async () => {

@@ -771,7 +771,17 @@ async def _handle_tool_results(
         customer_backend_tools=run_state.start_payload.get("tools", []),
     )
 
+    collected_cards = []
+    for r in (results or []):
+        r_out = r.output if hasattr(r, "output") else (r.get("output") if isinstance(r, dict) else None)
+        if isinstance(r_out, dict) and "cards" in r_out and isinstance(r_out["cards"], list):
+            for c in r_out["cards"]:
+                if len(collected_cards) < 3:
+                    collected_cards.append(c)
+
     response = await _run_agent_turn(agent, run_state, "", provider=provider)
+    if collected_cards:
+        response.cards = collected_cards
 
     return response
 

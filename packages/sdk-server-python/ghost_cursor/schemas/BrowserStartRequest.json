@@ -37,7 +37,10 @@
     },
     "ProtocolVersion": {
       "type": "string",
-      "const": "1",
+      "enum": [
+        "1",
+        "1.1"
+      ],
       "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
     },
     "RequestId": {

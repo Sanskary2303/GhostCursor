@@ -181,4 +181,20 @@ def register_shophive_tools(ghost: GhostCursorBackend, engine: Optional[AsyncEng
             "break_even_increase_percent": round(break_even_increase_percent, 1),
             "break_even_volume_multiplier": round(break_even_increase_percent / 100 + 1, 2),
             "sensitivity": sensitivity,
+            "cards": [
+                {
+                    "type": "metric",
+                    "label": "Projected Margin",
+                    "value": f"{new_margin_percent:.0f}%",
+                    "delta": f"-{promo_discount_percent:.0f}%",
+                },
+                {
+                    "type": "bars",
+                    "series": [
+                        {"label": "Current", "value": current_margin_percent},
+                        {"label": params.promo_code, "value": new_margin_percent},
+                        {"label": "Break-even Vol", "value": round(break_even_increase_percent, 1)},
+                    ],
+                },
+            ],
         }

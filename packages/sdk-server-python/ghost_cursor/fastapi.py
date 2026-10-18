@@ -42,13 +42,14 @@ class GhostCursorContinueRequest(BaseModel):
 
 class GhostCursorResponse(BaseModel):
     """Public response to frontend"""
-    protocolVersion: str = "1"
+    protocolVersion: str = "1.1"
     runId: str
     revision: int
     status: str
     reply: str
     questions: Optional[List[Dict[str, Any]]] = None
     actions: Optional[List[Dict[str, Any]]] = None
+    cards: Optional[List[Dict[str, Any]]] = None
 
 
 class SessionCreateRequest(BaseModel):

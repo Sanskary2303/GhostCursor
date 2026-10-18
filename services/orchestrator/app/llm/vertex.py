@@ -397,13 +397,23 @@ class MockVertexAIClient(BaseVertexClient):
                 elif out:
                     reply_lines.append(str(out))
 
+            collected_cards = []
+            for tr in tool_results:
+                out = tr.get("output") if isinstance(tr, dict) else getattr(tr, "output", None)
+                if isinstance(out, dict) and "cards" in out and isinstance(out["cards"], list):
+                    for c in out["cards"]:
+                        if len(collected_cards) < 3:
+                            collected_cards.append(c)
+
             reply = " ".join(reply_lines) if reply_lines else "I've retrieved the requested details from the system."
+            proto_ver = run_context.get("protocol_version", "1.1")
             return _record_and_return(HostedRunResponse(
-                protocolVersion="1",
+                protocolVersion=proto_ver if proto_ver in ("1", "1.1") else "1.1",
                 runId=run_id,
                 revision=revision,
                 status="completed",
                 reply=reply,
+                cards=collected_cards if collected_cards else None,
             ))
 
         # Handle action results continuation

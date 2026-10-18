@@ -15,7 +15,7 @@ import logging
 import inspect
 import asyncio
 from urllib.parse import urlsplit
-from typing import Any, Callable, Dict, List, Literal, Optional, Union, Awaitable
+from typing import Annotated, Any, Callable, Dict, List, Literal, Optional, Union, Awaitable
 from dataclasses import dataclass, field
 from abc import ABC, abstractmethod
 
@@ -62,7 +62,7 @@ class BrowserContext(_Strict):
 
 class BrowserStart(_Strict):
     command: Literal["start"]
-    protocolVersion: Literal["1"] = "1"
+    protocolVersion: Literal["1", "1.1"] = "1.1"
     requestId: uuid.UUID
     sessionId: Optional[uuid.UUID] = None
     message: str = Field(min_length=1, max_length=6000)
@@ -78,7 +78,7 @@ class BrowserResult(_Strict):
 
 class BrowserContinue(_Strict):
     command: Literal["continue"]
-    protocolVersion: Literal["1"] = "1"
+    protocolVersion: Literal["1", "1.1"] = "1.1"
     runId: uuid.UUID
     eventId: uuid.UUID
     revision: int = Field(ge=0)
@@ -88,15 +88,36 @@ class BrowserContinue(_Strict):
     context: Optional[BrowserContext] = None
 
 
+class MetricCard(_Strict):
+    type: Literal["metric"] = "metric"
+    label: str = Field(min_length=1, max_length=100)
+    value: Union[str, int, float]
+    delta: Optional[Union[str, int, float]] = None
+
+
+class BarSeriesItem(_Strict):
+    label: str = Field(min_length=1, max_length=100)
+    value: Union[int, float]
+
+
+class BarsCard(_Strict):
+    type: Literal["bars"] = "bars"
+    series: List[BarSeriesItem] = Field(max_length=8)
+
+
+InsightCard = Annotated[Union[MetricCard, BarsCard], Field(discriminator="type")]
+
+
 class PublicEnvelope(_Strict):
-    """Strict browser-facing public envelope with extra='forbid' and the 7 public keys"""
-    protocolVersion: Literal["1"] = "1"
+    """Strict browser-facing public envelope with extra='forbid' and the 8 public keys"""
+    protocolVersion: Literal["1", "1.1"] = "1.1"
     runId: str
     revision: int = Field(ge=0)
     status: Literal["awaiting_actions", "awaiting_answer", "completed", "failed", "cancelled"]
     reply: str
     questions: Optional[List[Dict[str, Any]]] = None
     actions: Optional[List[Dict[str, Any]]] = None
+    cards: Optional[List[InsightCard]] = Field(default=None, max_length=3)
 
 
 BRAIN_CANARY = "GHOST_BRAIN_SERVER_ONLY_CANARY_2026"
@@ -187,6 +208,7 @@ class HostedRunResponse(BaseModel):
     actions: Optional[List[Dict[str, Any]]] = None
     toolCalls: Optional[List[ToolCallRequest]] = None
     loopbackSignature: Optional[Dict[str, Any]] = None
+    cards: Optional[List[Dict[str, Any]]] = None
 
 
 # ============================================================================
@@ -519,6 +541,7 @@ class GhostCursorBackend:
             # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
             rounds = 0
             executed_tool_calls: List[Dict[str, str]] = []
+            collected_cards: List[Dict[str, Any]] = []
             while response.toolCalls and rounds < self.config.max_tool_rounds:
                 rounds += 1
                 for tc in response.toolCalls:
@@ -542,10 +565,17 @@ class GhostCursorBackend:
                     response.toolCalls,
                     user_id,
                 )
+                for tr in tool_results:
+                    if tr.ok and isinstance(tr.output, dict) and "cards" in tr.output:
+                        c = tr.output.get("cards")
+                        if isinstance(c, list):
+                            for item in c:
+                                if len(collected_cards) < 3:
+                                    collected_cards.append(item)
 
                 # Continue run with tool results
                 continue_request = HostedRunRequest(
-                    protocolVersion="1",
+                    protocolVersion=response.protocolVersion or "1.1",
                     runId=response.runId,
                     eventId=str(uuid.uuid4()),
                     revision=response.revision,
@@ -558,7 +588,10 @@ class GhostCursorBackend:
                 raise GatewayError(502, "tool_round_limit")
 
             # Return public projection (exclude toolCalls, brain, etc.)
-            public_resp = self._project_public_response(response)
+            public_resp = self._project_public_response(
+                response,
+                cards=collected_cards if collected_cards else None,
+            )
 
             # Run optional response filter
             if self.config.filter_response:
@@ -580,6 +613,8 @@ class GhostCursorBackend:
             try:
                 envelope = PublicEnvelope.model_validate(public_resp)
                 result = envelope.model_dump()
+                if envelope.cards is None:
+                    result.pop("cards", None)
             except ValidationError:
                 raise GatewayError(502, "bad_public_response")
 
@@ -667,6 +702,7 @@ class GhostCursorBackend:
             # Handle tool calls if any (Gateway Loopback) - loop up to max_tool_rounds
             rounds = 0
             executed_tool_calls: List[Dict[str, str]] = []
+            collected_cards: List[Dict[str, Any]] = []
             while response.toolCalls and rounds < self.config.max_tool_rounds:
                 rounds += 1
                 for tc in response.toolCalls:
@@ -691,10 +727,17 @@ class GhostCursorBackend:
                     response.toolCalls,
                     user_id,
                 )
+                for tr in tool_results:
+                    if tr.ok and isinstance(tr.output, dict) and "cards" in tr.output:
+                        c = tr.output.get("cards")
+                        if isinstance(c, list):
+                            for item in c:
+                                if len(collected_cards) < 3:
+                                    collected_cards.append(item)
 
                 # Continue run with tool results
                 continue_request = HostedRunRequest(
-                    protocolVersion="1",
+                    protocolVersion=response.protocolVersion or "1.1",
                     runId=response.runId,
                     eventId=str(uuid.uuid4()),
                     revision=response.revision,
@@ -711,7 +754,10 @@ class GhostCursorBackend:
                 yield f"event: status\ndata: {json.dumps({'status': 'planning'})}\n\n"
 
             # Return public projection (exclude toolCalls, brain, etc.)
-            public_resp = self._project_public_response(response)
+            public_resp = self._project_public_response(
+                response,
+                cards=collected_cards if collected_cards else None,
+            )
 
             # Run optional response filter
             if self.config.filter_response:
@@ -733,6 +779,8 @@ class GhostCursorBackend:
             try:
                 envelope = PublicEnvelope.model_validate(public_resp)
                 result = envelope.model_dump()
+                if envelope.cards is None:
+                    result.pop("cards", None)
             except ValidationError:
                 raise GatewayError(502, "bad_public_response")
 
@@ -1090,13 +1138,17 @@ class GhostCursorBackend:
         except Exception as e:
             logger.warning(f"Failed to summarize session {session_id}: {type(e).__name__}")
 
-    def _project_public_response(self, response: HostedRunResponse) -> Dict[str, Any]:
+    def _project_public_response(
+        self,
+        response: HostedRunResponse,
+        cards: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
         """Project internal response to public envelope (exclude internals)"""
         allowed = {"awaiting_actions", "awaiting_answer", "completed", "failed", "cancelled"}
         if response.status not in allowed:
             raise GatewayError(502, "bad_upstream_status")
 
-        return {
+        proj: Dict[str, Any] = {
             "protocolVersion": response.protocolVersion,
             "runId": response.runId,
             "revision": response.revision,
@@ -1106,6 +1158,10 @@ class GhostCursorBackend:
             "actions": response.actions,
             # toolCalls is intentionally excluded
         }
+        effective_cards = cards if cards is not None else getattr(response, "cards", None)
+        if effective_cards is not None:
+            proj["cards"] = effective_cards
+        return proj
 
 
 # ============================================================================

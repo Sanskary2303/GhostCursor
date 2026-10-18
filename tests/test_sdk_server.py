@@ -2513,6 +2513,202 @@ async def test_stream_turn_saves_chat_before_envelope_or_early_close():
     assert messages[1].content == "Saved before stream finishes."
 
 
+@pytest.mark.asyncio
+async def test_tool_returning_cards_included_in_public_response():
+    """Insight cards produced by a backend tool are collected and included in public response."""
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="shophive_demo",
+    )
+
+    @backend.register_tool(
+        name="simulate_margin",
+        description="Simulate discount margin",
+        schema={"type": "object", "properties": {"promo": {"type": "string"}}},
+    )
+    def simulate_margin(params):
+        promo_code = params.promo if hasattr(params, "promo") else params.get("promo", "SAVE20")
+        return {
+            "status": "calculated",
+            "cards": [
+                {"type": "metric", "label": "Projected Margin", "value": "28%", "delta": "-2%"},
+                {"type": "bars", "series": [{"label": "Current", "value": 30}, {"label": str(promo_code), "value": 28}]},
+            ],
+        }
+
+    run_id = str(uuid.uuid4())
+    call_count = 0
+
+    def mock_handler(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            tool_calls = [{"id": "call_sim_1", "tool": "simulate_margin", "parameters": {"promo": "SAVE20"}}]
+            return httpx.Response(200, json=make_mock_awaiting_tools(backend, run_id, 1, tool_calls, reply="Simulating..."))
+        else:
+            return httpx.Response(200, json={
+                "protocolVersion": "1.1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Simulation completed successfully.",
+                "questions": None,
+                "actions": None,
+            })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    payload = {
+        "command": "start",
+        "protocolVersion": "1.1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Simulate SAVE20 margin",
+        "context": {"page": "cart", "values": {}, "availableTargets": []},
+    }
+
+    result = await backend.handle_turn(payload, "user_card_test")
+    assert result["status"] == "completed"
+    assert "cards" in result
+    assert len(result["cards"]) == 2
+    assert result["cards"][0]["type"] == "metric"
+    assert result["cards"][0]["label"] == "Projected Margin"
+    assert result["cards"][1]["type"] == "bars"
+    assert len(result["cards"][1]["series"]) == 2
+    # Verify exact public response keys (8 keys)
+    assert set(result.keys()) == {
+        "protocolVersion",
+        "runId",
+        "revision",
+        "status",
+        "reply",
+        "questions",
+        "actions",
+        "cards",
+    }
+
+
+@pytest.mark.asyncio
+async def test_tool_cards_capped_at_three():
+    """Backend enforces maximum of 3 cards in public envelope."""
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="shophive_demo",
+    )
+
+    @backend.register_tool(
+        name="multi_card_tool",
+        description="Returns 4 cards",
+        schema={"type": "object", "properties": {}},
+    )
+    def multi_card_tool():
+        return {
+            "status": "ok",
+            "cards": [
+                {"type": "metric", "label": "M1", "value": "1"},
+                {"type": "metric", "label": "M2", "value": "2"},
+                {"type": "metric", "label": "M3", "value": "3"},
+                {"type": "metric", "label": "M4", "value": "4"},
+            ],
+        }
+
+    run_id = str(uuid.uuid4())
+    call_count = 0
+
+    def mock_handler(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            tool_calls = [{"id": "call_mc_1", "tool": "multi_card_tool", "parameters": {}}]
+            return httpx.Response(200, json=make_mock_awaiting_tools(backend, run_id, 1, tool_calls))
+        else:
+            return httpx.Response(200, json={
+                "protocolVersion": "1.1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Done multi cards",
+                "questions": None,
+                "actions": None,
+            })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    payload = {
+        "command": "start",
+        "protocolVersion": "1.1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Run multi cards",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    result = await backend.handle_turn(payload, "user_card_cap")
+    assert result["status"] == "completed"
+    assert "cards" in result
+    assert len(result["cards"]) == 3  # Capped at 3
+
+
+@pytest.mark.asyncio
+async def test_stream_turn_with_cards():
+    """stream_turn emits envelope containing cards collected from tools."""
+    backend = GhostCursorBackend(
+        api_key="test-key-shophive-demo-0123456789abcdef",
+        tenant_id="shophive_demo",
+    )
+
+    @backend.register_tool(
+        name="stream_card_tool",
+        description="Returns cards for streaming test",
+        schema={"type": "object", "properties": {}},
+    )
+    def stream_card_tool():
+        return {
+            "status": "ok",
+            "cards": [
+                {"type": "metric", "label": "Conversion", "value": "+12%"},
+            ],
+        }
+
+    run_id = str(uuid.uuid4())
+    call_count = 0
+
+    def mock_handler(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            tool_calls = [{"id": "call_sct_1", "tool": "stream_card_tool", "parameters": {}}]
+            return httpx.Response(200, json=make_mock_awaiting_tools(backend, run_id, 1, tool_calls))
+        else:
+            return httpx.Response(200, json={
+                "protocolVersion": "1.1",
+                "runId": run_id,
+                "revision": 2,
+                "status": "completed",
+                "reply": "Streaming with card completed.",
+                "questions": None,
+                "actions": None,
+            })
+
+    backend._get_http_client = lambda: httpx.AsyncClient(transport=httpx.MockTransport(mock_handler))
+
+    payload = {
+        "command": "start",
+        "protocolVersion": "1.1",
+        "requestId": str(uuid.uuid4()),
+        "message": "Stream card test",
+        "context": {"page": "home", "values": {}, "availableTargets": []},
+    }
+
+    chunks = []
+    async for chunk in backend.stream_turn(payload, "u_stream_cards"):
+        chunks.append(chunk)
+
+    all_output = "".join(chunks)
+    assert "event: envelope" in all_output
+    assert '"cards":' in all_output
+    assert '"Conversion"' in all_output
+
+
+
 
 
 

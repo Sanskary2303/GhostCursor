@@ -482,7 +482,7 @@ export class TransportManager {
 
     const request: BrowserRequest = {
       command: 'start',
-      protocolVersion: '1',
+      protocolVersion: '1.1',
       requestId,
       message,
       context,
@@ -551,7 +551,7 @@ export class TransportManager {
 
     const request: BrowserRequest = {
       command: 'continue',
-      protocolVersion: '1',
+      protocolVersion: '1.1',
       runId: this.runId,
       eventId,
       revision: this.revision,

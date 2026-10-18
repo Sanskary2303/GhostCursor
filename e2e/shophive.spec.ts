@@ -138,7 +138,12 @@ test('browser only talks to its own gateway and gets a public envelope', async (
     bodies.push(m ? JSON.parse(m[1]) : JSON.parse(raw));
   }
   for (const b of bodies) {
-    expect(Object.keys(b).sort()).toEqual(['actions', 'protocolVersion', 'questions', 'reply', 'revision', 'runId', 'status']);
+    const keys = Object.keys(b).sort();
+    if (keys.includes('cards')) {
+      expect(keys).toEqual(['actions', 'cards', 'protocolVersion', 'questions', 'reply', 'revision', 'runId', 'status']);
+    } else {
+      expect(keys).toEqual(['actions', 'protocolVersion', 'questions', 'reply', 'revision', 'runId', 'status']);
+    }
     expect(JSON.stringify(b)).not.toContain('GHOST_BRAIN_SERVER_ONLY_CANARY_2026');
   }
 });
@@ -689,6 +694,18 @@ test('path preview: numbered dashed markers appear on hover/preview and disappea
   await expect(marker).toHaveCount(0, { timeout: 10_000 });
   await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
 });
+
+test('insight cards: asking "Simulate SAVE20 margin" shows a metric card plus a bars card', async ({ page }) => {
+  await page.goto('/');
+  await ask(page, 'Simulate SAVE20 margin');
+  const panel = chat(page);
+  await expect(panel.locator('.gc-metric-card')).toBeVisible({ timeout: 20_000 });
+  await expect(panel.locator('.gc-metric-label')).toHaveText('Projected Margin');
+  await expect(panel.locator('.gc-bars-card')).toBeVisible({ timeout: 20_000 });
+  await expect(panel.locator('.gc-bars-card svg.gc-bars-svg')).toBeVisible();
+  await expect(panel.locator('.gc-bar-label').filter({ hasText: 'SAVE20' })).toBeVisible();
+});
+
 
 
 

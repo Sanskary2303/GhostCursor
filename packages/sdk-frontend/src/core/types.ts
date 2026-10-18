@@ -4,7 +4,7 @@
  */
 
 // Primitive constraints
-export type ProtocolVersion = '1';
+export type ProtocolVersion = '1' | '1.1';
 /** @pattern ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
 export type RunId = string;
 /** @pattern ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ */
@@ -133,14 +133,40 @@ export interface ToolResult {
   error?: string;
 }
 
+export interface MetricCard {
+  type: 'metric';
+  label: string;
+  value: string | number;
+  delta?: string | number;
+}
+
+export interface BarSeriesItem {
+  label: string;
+  value: number;
+}
+
+export interface BarsCard {
+  type: 'bars';
+  /**
+   * @maxItems 8
+   */
+  series: BarSeriesItem[];
+}
+
+export type InsightCard = MetricCard | BarsCard;
+
 export interface PublicResponse {
   protocolVersion: ProtocolVersion;
   runId: RunId;
   revision: number;
   status: RunStatus;
   reply: string;
-  questions?: ClarifyQuestion[];
-  actions?: Action[];
+  questions?: ClarifyQuestion[] | null;
+  actions?: Action[] | null;
+  /**
+   * @maxItems 3
+   */
+  cards?: InsightCard[] | null;
   toolCalls?: never; // Never exposed to browser
 }
 
@@ -178,8 +204,9 @@ export interface HostedResponse {
   revision: number;
   status: RunStatus;
   reply: string;
-  questions?: ClarifyQuestion[];
-  actions?: Action[];
+  questions?: ClarifyQuestion[] | null;
+  actions?: Action[] | null;
+  cards?: InsightCard[] | null;
   toolCalls?: ToolCall[];
 }
 

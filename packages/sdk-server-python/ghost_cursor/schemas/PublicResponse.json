@@ -21,16 +21,44 @@
           "type": "string"
         },
         "questions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ClarifyQuestion"
-          }
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/ClarifyQuestion"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "actions": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/Action"
-          }
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/Action"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "cards": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/InsightCard"
+              }
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "maxItems": 3
         }
       },
       "required": [
@@ -44,7 +72,10 @@
     },
     "ProtocolVersion": {
       "type": "string",
-      "const": "1",
+      "enum": [
+        "1",
+        "1.1"
+      ],
       "description": "Core TypeScript types for Ghost Cursor SDK Matches the canonical protocol v1 specification"
     },
     "RunId": {
@@ -160,6 +191,83 @@
       "required": [
         "target_id",
         "message"
+      ],
+      "additionalProperties": false
+    },
+    "InsightCard": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/MetricCard"
+        },
+        {
+          "$ref": "#/definitions/BarsCard"
+        }
+      ]
+    },
+    "MetricCard": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "metric"
+        },
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "delta": {
+          "type": [
+            "string",
+            "number"
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "label",
+        "value"
+      ],
+      "additionalProperties": false
+    },
+    "BarsCard": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "bars"
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/BarSeriesItem"
+          },
+          "maxItems": 8
+        }
+      },
+      "required": [
+        "type",
+        "series"
+      ],
+      "additionalProperties": false
+    },
+    "BarSeriesItem": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "label",
+        "value"
       ],
       "additionalProperties": false
     }

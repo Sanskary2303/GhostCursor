@@ -140,6 +140,20 @@ export const WIDGET_CSS = `
 @keyframes gc-peek { 0%, 100% { transform: translate(2px, 1px) rotate(0deg); } 50% { transform: translate(6px, -3px) rotate(-14deg); } }
 @keyframes gc-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 @keyframes ghost-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.gc-insight-cards { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
+.gc-insight-card { border: 1px solid var(--gc-border); border-radius: 12px; background: var(--gc-surface); padding: 10px 12px; }
+.gc-metric-card { display: flex; flex-direction: column; gap: 4px; }
+.gc-metric-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; color: var(--gc-muted); }
+.gc-metric-row { display: flex; align-items: baseline; gap: 8px; }
+.gc-metric-value { font-size: 20px; font-weight: 800; color: var(--gc-text); }
+.gc-metric-delta { font-size: 12px; font-weight: 700; }
+.gc-metric-delta--pos { color: var(--gc-success, #22c55e); }
+.gc-metric-delta--neg { color: var(--gc-danger, #ef4444); }
+.gc-bars-card { overflow: hidden; padding: 10px; }
+.gc-bars-svg { display: block; overflow: visible; }
+.gc-bar-rect { fill: var(--gc-accent); }
+.gc-bar-val { font-size: 10px; font-weight: 700; fill: var(--gc-text); }
+.gc-bar-label { font-size: 10px; font-weight: 600; fill: var(--gc-muted); }
 @media (prefers-reduced-motion: reduce) {
   .gc-root *, .gc-root *::before, .gc-root *::after { animation: none !important; transition: none !important; }
 }

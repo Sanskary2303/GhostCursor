@@ -33,7 +33,7 @@ class _Strict(BaseModel):
 # Primitive Constraints
 # ============================================================================
 
-ProtocolVersion = Literal["1"]
+ProtocolVersion = Literal["1", "1.1"]
 
 LOGICAL_ID_PATTERN = re.compile(r"^[a-zA-Z0-9_.:-]+$")
 SUBJECT_PATTERN = re.compile(r"^[a-zA-Z0-9_.:@-]+$")
@@ -268,6 +268,7 @@ class HostedRunResponse(BaseModel):
     actions: Optional[List[Dict[str, Any]]] = None
     toolCalls: Optional[List[ToolCallRequest]] = None
     loopbackSignature: Optional[Dict[str, Any]] = None
+    cards: Optional[List[Dict[str, Any]]] = None
 
     @model_validator(mode="after")
     def validate_discrete_plan(self):

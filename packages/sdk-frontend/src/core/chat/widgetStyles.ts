@@ -58,17 +58,26 @@ export const WIDGET_CSS = `
 .gc-hint { margin-top: 8px; text-align: center; font-size: 11px; color: var(--gc-muted); }
 .gc-plan { margin: 0 12px 12px; border: 1px solid var(--gc-border); border-radius: 14px; background: var(--gc-surface); overflow: hidden; animation: ghost-fade-in .25s ease-out; }
 .gc-plan-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px dashed var(--gc-accent-line); font-size: 11px; font-weight: 800; letter-spacing: .14em; color: var(--gc-muted); }
+.gc-plan-preview { background: none; border: 0; color: var(--gc-accent); font: inherit; font-size: 11px; font-weight: 700; cursor: pointer; text-decoration: underline; padding: 0 4px; }
+.gc-plan-preview:hover { opacity: .8; }
 .gc-plan-list { list-style: none; margin: 0; padding: 4px 0; max-height: 220px; overflow-y: auto; }
-.gc-plan-step { display: grid; grid-template-columns: 22px 18px 1fr; gap: 10px; align-items: start; padding: 8px 14px; }
+.gc-plan-step { display: grid; grid-template-columns: 22px 18px 1fr; gap: 10px; align-items: start; padding: 8px 14px; cursor: pointer; }
+.gc-plan-step:hover, .gc-plan-step:focus-visible { background: var(--gc-accent-soft); }
 .gc-plan-num { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; background: var(--gc-accent-soft); color: var(--gc-accent); font-size: 11px; font-weight: 800; }
 .gc-plan-icon { line-height: 22px; text-align: center; color: var(--gc-accent); font-size: 14px; }
 .gc-plan-text { font-size: 13px; font-weight: 600; line-height: 22px; }
+.gc-plan-page { font-size: 11px; color: var(--gc-muted); font-weight: 500; margin-left: 4px; }
+.gc-plan-risk-warn { margin-left: 4px; font-size: 12px; }
 .gc-plan-why { font-size: 12px; color: var(--gc-muted); line-height: 1.4; }
+.gc-plan-confirm-row { padding: 8px 14px; margin: 0 14px 6px; background: rgba(239, 68, 68, .08); border: 1px dashed rgba(239, 68, 68, .4); border-radius: 8px; }
+.gc-plan-confirm-label { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--gc-text); }
+.gc-plan-confirm-checkbox { accent-color: var(--gc-accent); cursor: pointer; }
 .gc-plan-toggle-row { display: flex; align-items: center; justify-content: flex-end; padding: 0 14px 4px; }
 .gc-plan-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--gc-muted); cursor: pointer; user-select: none; }
 .gc-plan-toggle input { accent-color: var(--gc-accent); cursor: pointer; }
 .gc-plan-actions { display: flex; gap: 8px; padding: 10px 14px 14px; }
 .gc-btn { flex: 1; padding: 10px 14px; border-radius: 10px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; }
+.gc-btn:disabled { opacity: .5; cursor: not-allowed; }
 .gc-btn--ghost { background: transparent; color: var(--gc-text); border: 1px solid var(--gc-border); }
 .gc-btn--ghost:hover { border-color: var(--gc-muted); }
 .gc-btn--primary { background: var(--gc-accent); color: #fff; border: 0; box-shadow: 0 6px 16px var(--gc-accent-soft); }

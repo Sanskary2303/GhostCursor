@@ -1,7 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { h, render } from 'preact';
-import { ChatWidget, type ChatWidgetProps } from './chat/ChatWidget';
+import { ChatWidget, type ChatWidgetProps, ActionApprovalPanel } from './chat/ChatWidget';
 import { createBridge, type Bridge, INITIAL_WIDGET_STATE, type WidgetBridgeState } from './bridge';
+import { registerTarget, clearTargetRegistry } from './dom-utils';
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
@@ -27,7 +28,10 @@ function mount(props?: Partial<ChatWidgetProps>, bridge?: Bridge<WidgetBridgeSta
 }
 
 describe('ChatWidget shell', () => {
-  afterEach(() => { document.body.innerHTML = ''; });
+  afterEach(() => {
+    clearTargetRegistry();
+    document.body.innerHTML = '';
+  });
 
   it('renders one themed stylesheet and a branded launcher', () => {
     const { root } = mount();
@@ -439,6 +443,91 @@ describe('ChatWidget shell', () => {
     const updatedMsgs = root.querySelectorAll('.gc-msg');
     expect(updatedMsgs).toHaveLength(4);
     expect(updatedMsgs[3].textContent).toContain('Welcome back!');
+  });
+
+  it('risk: "confirm" shows warning ⚠️, requires confirmation checkbox before Approve and Run is enabled', async () => {
+    registerTarget('sensitive_btn', {
+      page: 'checkout',
+      resolve: () => document.createElement('button'),
+      operations: ['click'],
+      risk: 'confirm',
+    });
+
+    const onApprove = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    render(h(ActionApprovalPanel, {
+      actions: [{ id: 'a1', type: 'click', target_id: 'sensitive_btn' }],
+      onApprove,
+      currentPage: 'checkout',
+    }), host);
+
+    expect(host.textContent).toContain('⚠️');
+    expect(host.textContent).toContain("I understand this step can't be undone");
+
+    const approveBtn = host.querySelector('.gc-btn--primary') as HTMLButtonElement;
+    expect(approveBtn).not.toBeNull();
+    expect(approveBtn.disabled).toBe(true);
+
+    const checkbox = host.querySelector('.gc-plan-confirm-checkbox') as HTMLInputElement;
+    expect(checkbox).not.toBeNull();
+    expect(checkbox.checked).toBe(false);
+
+    checkbox.checked = true;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+
+    expect(approveBtn.disabled).toBe(false);
+    approveBtn.click();
+    expect(onApprove).toHaveBeenCalledWith(true, false);
+  });
+
+  it('preview link and other page label in ActionApprovalPanel', async () => {
+    const el = document.createElement('button');
+    el.setAttribute('data-ghost-id', 'page_btn');
+    document.body.appendChild(el);
+
+    registerTarget('page_btn', {
+      page: 'home',
+      resolve: () => el,
+      operations: ['click'],
+    });
+
+    registerTarget('settings_btn', {
+      page: 'settings',
+      resolve: () => null,
+      operations: ['click'],
+    });
+
+    const onPreview = vi.fn();
+    const onClearPreview = vi.fn();
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+
+    render(h(ActionApprovalPanel, {
+      actions: [
+        { id: 's1', type: 'click', target_id: 'page_btn' },
+        { id: 's2', type: 'click', target_id: 'settings_btn' },
+      ],
+      onApprove: () => {},
+      currentPage: 'home',
+      onPreview,
+      onClearPreview,
+    }), host);
+
+    // Step on settings shows "on Settings"
+    expect(host.textContent).toContain('on Settings');
+
+    // Preview link triggers onPreview with on-page elements
+    const previewBtn = host.querySelector('.gc-plan-preview') as HTMLButtonElement;
+    expect(previewBtn).not.toBeNull();
+    previewBtn.click();
+    expect(onPreview).toHaveBeenCalledWith([el]);
+
+    // Mouse leave triggers onClearPreview
+    const plan = host.querySelector('.gc-plan') as HTMLElement;
+    plan.dispatchEvent(new Event('mouseleave'));
+    expect(onClearPreview).toHaveBeenCalled();
   });
 });
 

@@ -3,7 +3,7 @@
  * Receives tool calls from the backend and executes them against the DOM
  */
 
-import type { Action, ToolResult } from '../types';
+import type { Action, ToolResult, TargetRisk } from '../types';
 import { setNativeValue, setNativeSelectValue, setNativeCheckboxState, verifyValueRetained } from '../native-setter';
 import { resolveTargetWithCascade, reResolveElement, ResolutionOptions, getRegisteredTarget } from '../dom-utils';
 import { TourEngine } from '../engine/TourEngine';
@@ -16,6 +16,7 @@ export interface StepInfo {
   /** Aborted when the user presses Stop. */
   signal: AbortSignal;
   tour?: { index: number; total: number };
+  risk?: TargetRisk;
 }
 
 export interface ExecutionOptions {
@@ -39,6 +40,7 @@ export interface ExecutionOptions {
   stepByStep?: boolean;
   /** Called and awaited before acting in stepByStep mode. Returns true to proceed, false to halt. */
   onStepApproval?: (element: HTMLElement, info: StepInfo) => Promise<boolean> | boolean;
+  cursor?: any;
 }
 
 export interface ExecutionResult {
@@ -60,6 +62,7 @@ const DEFAULT_EXECUTION_OPTIONS: Required<ExecutionOptions> = {
   onStepStart: () => {},
   onWait: () => {},
   allowSemanticLookup: false,
+  cursor: null,
 };
 
 function prefersReducedMotion(): boolean {
@@ -150,6 +153,10 @@ async function executeAction(
           error: 'operation not allowed',
         };
       }
+
+      if (registered?.risk === 'never' || (action as any).risk === 'never') {
+        return await executeNeverRiskTarget(target_id, options, info, action);
+      }
     }
 
     switch (action.type) {
@@ -188,6 +195,55 @@ async function executeAction(
       error: error instanceof Error ? error.message : 'Unknown execution error',
     };
   }
+}
+
+/**
+ * Handles targets marked risk: 'never'
+ * The executor flies, highlights, captions "You'll need to click this yourself",
+ * and returns { ok: false, error: 'needs the user: high-risk control' } without acting.
+ */
+async function executeNeverRiskTarget(
+  targetId: string,
+  options: Required<ExecutionOptions>,
+  info: StepInfo,
+  action: Action
+): Promise<ToolResult> {
+  options.onProgress(`${action.type}:${targetId}`, 'executing');
+  options.onWait(true, info);
+  let resolution: Awaited<ReturnType<typeof resolveTargetWithCascade>>;
+  try {
+    resolution = await resolveTargetWithCascade(targetId, {
+      timeout: options.timeout,
+      allowSemanticLookup: options.allowSemanticLookup,
+    });
+  } finally {
+    options.onWait(false, info);
+  }
+  if (!resolution.element) {
+    return { id: action.id ?? crypto.randomUUID(), ok: false, error: `Element not found or not interactable: ${targetId}` };
+  }
+
+  const freshElement = reResolveElement(targetId, {
+    allowSemanticLookup: options.allowSemanticLookup,
+  });
+  if (!freshElement || !document.body.contains(freshElement)) {
+    return { id: action.id ?? crypto.randomUUID(), ok: false, error: `Element became stale: ${targetId}` };
+  }
+
+  const riskInfo: StepInfo = { ...info, risk: 'never' };
+  await animateCursorTo(freshElement, options, riskInfo);
+
+  if (options.cursor) {
+    options.cursor.highlight(freshElement);
+    options.cursor.setCaption("You'll need to click this yourself");
+  }
+
+  options.onProgress(`${action.type}:${targetId}`, 'failed');
+  return {
+    id: action.id ?? crypto.randomUUID(),
+    ok: false,
+    error: 'needs the user: high-risk control',
+  };
 }
 
 /**
@@ -529,9 +585,12 @@ export class ActionExecutor {
         this.isStopped = false;
         return { success: false, results, error: 'cancelled' };
       }
-      const info: StepInfo = { action: actions[i], index: i, total: actions.length, signal: this.abortController.signal };
+      const act = actions[i];
+      const registered = act.target_id ? getRegisteredTarget(act.target_id) : undefined;
+      const risk = registered?.risk ?? (act as any).risk;
+      const info: StepInfo = { action: act, index: i, total: actions.length, signal: this.abortController.signal, risk };
       opts.onStepStart(info);
-      const result = await executeAction(actions[i], opts, info);
+      const result = await executeAction(act, opts, info);
       result.id = actions[i].id ?? result.id;
       results.push(result);
       try {

@@ -21,6 +21,15 @@ const ghostContext = {
   page: () => (window.location.pathname.startsWith('/product/') ? 'products' : ROUTE_PAGES[window.location.pathname] ?? 'home'),
 };
 const ghostTheme = { primaryColor: '#3B7BDF', cursorColor: '#3B7BDF', mode: 'midnight' as const, position: 'bottom-right' as const };
+const ghostTargets = {
+  'checkout.place_order': {
+    page: 'checkout',
+    resolve: () => document.querySelector<HTMLElement>('[data-ghost-id="checkout.place_order"]'),
+    operations: ['click' as const],
+    risk: 'never' as const,
+    label: 'Place order',
+  },
+};
 
 export function App() {
   return (
@@ -47,6 +56,7 @@ export function App() {
               apiEndpoint="/api/ghost-cursor"
               theme={ghostTheme}
               context={ghostContext}
+              targets={ghostTargets}
               requireApprovalForActions={true}
             />
           </div>

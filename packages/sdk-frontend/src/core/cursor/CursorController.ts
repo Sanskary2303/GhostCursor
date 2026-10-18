@@ -15,6 +15,8 @@ const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, m
 export interface CursorControllerOptions {
   /** Screen rect of the dock socket (or launcher) in the widget, or null if it isn't rendered. */
   getDockRect: () => DOMRect | null;
+  /** Element of the dock socket (or launcher) in the widget. */
+  getDockElement?: () => HTMLElement | null;
   /** #RRGGBB accent for the echo and trails. Anything else falls back to the brand blue. */
   accent?: string;
   onStateChange?: (state: CursorState) => void;
@@ -53,6 +55,8 @@ export class CursorController {
   private ringRoot: ShadowRoot | null = null;
   private captionEl: HTMLElement | null = null;
   private rings = new Set<RingHandle>();
+  private previewMarkers: HTMLElement[] = [];
+  private previewTimer: ReturnType<typeof setTimeout> | null = null;
   private running = new Set<Animation>();
   private pos: Point = { x: 0, y: 0 };
   private current: CursorState = 'docked';
@@ -258,6 +262,99 @@ export class CursorController {
     }
   }
 
+  /**
+   * Shows numbered dashed markers ❶❷❸ over the on-page targets.
+   * Auto-clears after 4 seconds or when clearPreview() is called.
+   * The docked cursor peeks toward step ❶.
+   */
+  showPreview(targets: Array<HTMLElement | { element: HTMLElement }>): void {
+    this.clearPreview();
+    if (this.disposed || typeof document === 'undefined') return;
+    this.mount();
+    const root = this.ringRoot;
+    if (!root) return;
+
+    const GLYPHS = ['❶', '❷', '❸', '❹', '❺', '❻', '❼', '❽', '❾', '❿'];
+    const elements = targets
+      .map(t => (t instanceof HTMLElement ? t : (t && (t as any).element instanceof HTMLElement ? (t as any).element : null)))
+      .filter((el): el is HTMLElement => Boolean(el));
+
+    elements.forEach((el, index) => {
+      const r = el.getBoundingClientRect();
+      const marker = document.createElement('div');
+      marker.className = 'gc-preview-marker';
+      marker.setAttribute('aria-hidden', 'true');
+      marker.style.left = `${r.left - 4}px`;
+      marker.style.top = `${r.top - 4}px`;
+      marker.style.width = `${r.width + 8}px`;
+      marker.style.height = `${r.height + 8}px`;
+
+      const radius = parseFloat(getComputedStyle(el).borderTopLeftRadius || '0');
+      marker.style.borderRadius = `${(Number.isFinite(radius) ? radius : 4) + 4}px`;
+
+      const badge = document.createElement('span');
+      badge.className = 'gc-preview-badge';
+      badge.setAttribute('aria-hidden', 'true');
+      const glyph = GLYPHS[index] ?? String(index + 1);
+      badge.textContent = glyph;
+      marker.appendChild(badge);
+
+      root.appendChild(marker);
+      this.previewMarkers.push(marker);
+    });
+
+    if (elements.length > 0) {
+      this.peekToward(elements[0]);
+    }
+
+    this.previewTimer = setTimeout(() => {
+      this.clearPreview();
+    }, 4000);
+  }
+
+  clearPreview(): void {
+    if (this.previewTimer) {
+      clearTimeout(this.previewTimer);
+      this.previewTimer = null;
+    }
+    for (const marker of this.previewMarkers) {
+      if (marker.parentNode) marker.parentNode.removeChild(marker);
+    }
+    this.previewMarkers = [];
+    this.unpeek();
+  }
+
+  private peekToward(el: HTMLElement): void {
+    try {
+      const dock = this.dockPoint();
+      const targetPt = aimPoint(el.getBoundingClientRect(), { width: window.innerWidth, height: window.innerHeight });
+      const dx = targetPt.x - dock.x;
+      const dy = targetPt.y - dock.y;
+      const angle = Math.round(Math.atan2(dy, dx) * (180 / Math.PI));
+      const dockEl = this.opts.getDockElement?.();
+      const dockCursor = (dockEl?.querySelector('.gc-dock-cursor') || dockEl) as HTMLElement | null;
+      if (dockCursor) {
+        dockCursor.style.transform = `translate(4px, -2px) rotate(${angle}deg)`;
+        dockCursor.style.transition = 'transform .2s ease';
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  private unpeek(): void {
+    try {
+      const dockEl = this.opts.getDockElement?.();
+      const dockCursor = (dockEl?.querySelector('.gc-dock-cursor') || dockEl) as HTMLElement | null;
+      if (dockCursor) {
+        dockCursor.style.transform = '';
+        dockCursor.style.transition = '';
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   /** Freeze all motion where it is (Stop). Pending flyTo()/dock() promises resolve. */
   cancel(): void {
     for (const anim of [...this.running]) {
@@ -274,6 +371,7 @@ export class CursorController {
   }
 
   dispose(): void {
+    this.clearPreview();
     this.cancel();
     this.disposed = true;
     for (const ring of [...this.rings]) ring.remove();

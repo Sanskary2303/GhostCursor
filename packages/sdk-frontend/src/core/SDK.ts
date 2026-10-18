@@ -139,11 +139,59 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
 
   const transportManager = new TransportManager(transport);
 
+  // Mount widget
+  defineGhostCursorElement();
+  let widgetContainer: HTMLElement;
+  if (mount) {
+    widgetContainer = mount;
+    if (!document.body.contains(widgetContainer)) {
+      widgetContainer.id = widgetContainer.id || 'ghost-cursor-widget-container';
+      document.body.appendChild(widgetContainer);
+    }
+  } else {
+    const existing = document.getElementById('ghost-cursor-widget-container');
+    if (existing) {
+      widgetContainer = existing;
+    } else {
+      const tag = typeof customElements !== 'undefined' ? 'ghost-cursor-widget' : 'div';
+      widgetContainer = document.createElement(tag);
+      widgetContainer.id = 'ghost-cursor-widget-container';
+      document.body.appendChild(widgetContainer);
+    }
+  }
+
+  // Create shadow root for widget isolation (reuse if already present)
+  const shadowRoot = widgetContainer.shadowRoot || widgetContainer.attachShadow({ mode: 'open' });
+
+  const widgetBridge = createBridge<WidgetBridgeState>({ ...INITIAL_WIDGET_STATE });
+  // Created now, mounted lazily on the first undock().
+  const cursor = new CursorController({
+    accent: mergedTheme.cursorColor,
+    getDockRect: () => {
+      const dock = shadowRoot.getElementById('gc-dock') ?? shadowRoot.getElementById('gc-launcher');
+      return dock ? dock.getBoundingClientRect() : null;
+    },
+    getDockElement: () => shadowRoot.getElementById('gc-dock') ?? shadowRoot.getElementById('gc-launcher'),
+    onStateChange: (state) => {
+      const away = state !== 'docked';
+      if (widgetBridge.get().cursorAway !== away) widgetBridge.set({ cursorAway: away });
+    },
+    onDocked: (outcome) => {
+      widgetBridge.set({ outcome, step: null, status: '' });
+      if (outcome !== 'error') {
+        setTimeout(() => {
+          if (widgetBridge.get().outcome === outcome) widgetBridge.set({ outcome: 'none' });
+        }, 2500);
+      }
+    },
+  });
+
   let activeRing: RingHandle | null = null;
   const actionExecutor = new ActionExecutor({
     timeout: 8000,
     requireApproval: requireApprovalForActions,
     allowSemanticLookup,
+    cursor,
     onProgress: (step, status) => console.log(`[GhostCursor] ${step}: ${status}`),
     onStepApproval: async (_element, info) => {
       cursor.setCaption('Approve this step?');
@@ -184,7 +232,11 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         return; // the tour draws its own spotlight, so no ring
       }
       activeRing = cursor.highlight(element);
-      cursor.setCaption(`${info.index + 1}/${info.total} • ${describeAction(info.action)}`);
+      if (info.risk === 'never') {
+        cursor.setCaption("You'll need to click this yourself");
+      } else {
+        cursor.setCaption(`${info.index + 1}/${info.total} • ${describeAction(info.action)}`);
+      }
     },
     onBeforeAct: async (element, info) => {
       if (info.action.type === 'fill_input') {
@@ -193,13 +245,17 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
         await cursor.press();
       }
     },
-    onStepEnd: (_info, result) => {
-      cursor.setCaption(null);
+    onStepEnd: (info, result) => {
+      if (info.risk === 'never') {
+        setTimeout(() => cursor.setCaption(null), 3000);
+      } else {
+        cursor.setCaption(null);
+      }
       const ring = activeRing;
       activeRing = null;
       if (!ring) return;
       ring.setTone(result.ok ? 'success' : 'error');
-      setTimeout(() => ring.remove(), result.ok ? 350 : 900);
+      setTimeout(() => ring.remove(), result.ok ? 350 : (info.risk === 'never' ? 3000 : 900));
     },
     onStepStart: (info) => {
       widgetBridge.set({
@@ -214,52 +270,6 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
     onStepChange: (index, step) => console.log(`[GhostCursor] Tour step ${index + 1}:`, step),
     onComplete: () => console.log('[GhostCursor] Tour completed'),
     onSkip: () => console.log('[GhostCursor] Tour skipped'),
-  });
-
-  // Mount widget
-  defineGhostCursorElement();
-  let widgetContainer: HTMLElement;
-  if (mount) {
-    widgetContainer = mount;
-    if (!document.body.contains(widgetContainer)) {
-      widgetContainer.id = widgetContainer.id || 'ghost-cursor-widget-container';
-      document.body.appendChild(widgetContainer);
-    }
-  } else {
-    const existing = document.getElementById('ghost-cursor-widget-container');
-    if (existing) {
-      widgetContainer = existing;
-    } else {
-      const tag = typeof customElements !== 'undefined' ? 'ghost-cursor-widget' : 'div';
-      widgetContainer = document.createElement(tag);
-      widgetContainer.id = 'ghost-cursor-widget-container';
-      document.body.appendChild(widgetContainer);
-    }
-  }
-
-  // Create shadow root for widget isolation (reuse if already present)
-  const shadowRoot = widgetContainer.shadowRoot || widgetContainer.attachShadow({ mode: 'open' });
-
-  const widgetBridge = createBridge<WidgetBridgeState>({ ...INITIAL_WIDGET_STATE });
-  // Created now, mounted lazily on the first undock().
-  const cursor = new CursorController({
-    accent: mergedTheme.cursorColor,
-    getDockRect: () => {
-      const dock = shadowRoot.getElementById('gc-dock') ?? shadowRoot.getElementById('gc-launcher');
-      return dock ? dock.getBoundingClientRect() : null;
-    },
-    onStateChange: (state) => {
-      const away = state !== 'docked';
-      if (widgetBridge.get().cursorAway !== away) widgetBridge.set({ cursorAway: away });
-    },
-    onDocked: (outcome) => {
-      widgetBridge.set({ outcome, step: null, status: '' });
-      if (outcome !== 'error') {
-        setTimeout(() => {
-          if (widgetBridge.get().outcome === outcome) widgetBridge.set({ outcome: 'none' });
-        }, 2500);
-      }
-    },
   });
 
   const nextFrame = () => new Promise<void>((resolve) => {
@@ -371,6 +381,8 @@ export function createGhostCursor(options: CreateGhostCursorOptions): GhostCurso
       onShowMe: (steps: { targetId: string; label: string }[]) => {
         void startTour(steps.map(s => ({ target_id: s.targetId, message: `Here: ${s.label}`, spotlight: true })));
       },
+      onPreview: (targets: HTMLElement[]) => cursor.showPreview(targets),
+      onClearPreview: () => cursor.clearPreview(),
     }),
     shadowRoot
   );

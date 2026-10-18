@@ -34,6 +34,8 @@ export interface ContextSnapshot {
   timestamp: number;
 }
 
+export type TargetRisk = 'normal' | 'confirm' | 'never';
+
 // Target registration
 export interface Target {
   page: string | 'global';
@@ -45,6 +47,7 @@ export interface Target {
   verify?: (action: Action, signal: AbortSignal) => Promise<boolean>;
   /** Human-readable name shown in plan cards, e.g. "Dark mode switch". */
   label?: string;
+  risk?: TargetRisk;
 }
 
 export type TargetOperation = 'click' | 'fill' | 'select' | 'toggle' | 'navigate' | 'observe';

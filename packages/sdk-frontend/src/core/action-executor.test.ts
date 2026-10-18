@@ -1,12 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ActionExecutor } from './executor/ActionExecutor';
 import type { Action } from './types';
+import { registerTarget, clearTargetRegistry } from './dom-utils';
 
 describe('ActionExecutor', () => {
   const origGetBoundingClientRect = Element.prototype.getBoundingClientRect;
 
   beforeEach(() => {
     document.body.innerHTML = '';
+    clearTargetRegistry();
     Element.prototype.getBoundingClientRect = vi.fn().mockReturnValue({
       width: 100,
       height: 30,
@@ -21,6 +23,7 @@ describe('ActionExecutor', () => {
   });
 
   afterEach(() => {
+    clearTargetRegistry();
     Element.prototype.getBoundingClientRect = origGetBoundingClientRect;
   });
 
@@ -162,6 +165,46 @@ describe('ActionExecutor', () => {
     const result = await executor.execute([{ id: 'o1', type: 'click', target_id: 'order_btn' }]);
     expect(result.success).toBe(true);
     expect(log).toEqual(['aim', 'before', 'click', 'end:true']);
+  });
+
+  it('risk: "never" does not click, animates cursor, and returns needs the user error', async () => {
+    const btn = document.createElement('button');
+    btn.setAttribute('data-ghost-id', 'never_btn');
+    document.body.appendChild(btn);
+    const clicked = vi.fn();
+    btn.addEventListener('click', clicked);
+
+    registerTarget('never_btn', {
+      page: 'checkout',
+      resolve: () => btn,
+      operations: ['click'],
+      risk: 'never',
+    });
+
+    let aimedInfo: any = null;
+    const mockCursor = {
+      highlight: vi.fn(),
+      setCaption: vi.fn(),
+    };
+
+    const executor = new ActionExecutor({
+      timeout: 500,
+      cursor: mockCursor,
+      onAim: (_el, info) => {
+        aimedInfo = info;
+      },
+    });
+
+    const result = await executor.execute([{ id: 'n1', type: 'click', target_id: 'never_btn' }]);
+    expect(result.success).toBe(false);
+    expect(result.results).toHaveLength(1);
+    expect(result.results[0].id).toBe('n1');
+    expect(result.results[0].ok).toBe(false);
+    expect(result.results[0].error).toBe('needs the user: high-risk control');
+    expect(clicked).not.toHaveBeenCalled();
+    expect(aimedInfo?.risk).toBe('never');
+    expect(mockCursor.highlight).toHaveBeenCalledWith(btn);
+    expect(mockCursor.setCaption).toHaveBeenCalledWith("You'll need to click this yourself");
   });
 });
 

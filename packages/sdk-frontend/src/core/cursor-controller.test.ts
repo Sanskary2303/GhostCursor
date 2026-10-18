@@ -182,5 +182,55 @@ describe('acting animations', () => {
     expect(c.state).toBe('aiming');
     c.dispose();
   });
+
+  it('showPreview() creates one marker per target in #ghost-cursor-rings and clearPreview() removes them', () => {
+    const dockEl = document.createElement('div');
+    const dockCursor = document.createElement('div');
+    dockCursor.className = 'gc-dock-cursor';
+    dockEl.appendChild(dockCursor);
+    document.body.appendChild(dockEl);
+
+    const c = new CursorController({
+      getDockRect: () => dockRect,
+      getDockElement: () => dockEl,
+      reducedMotion: () => true,
+    });
+    const b1 = target(box(10, 20, 80, 40));
+    const b2 = target(box(120, 200, 100, 50));
+
+    c.showPreview([b1, b2]);
+
+    const ringHost = document.getElementById('ghost-cursor-rings')!;
+    expect(ringHost).not.toBeNull();
+    const markers = ringHost.shadowRoot!.querySelectorAll('.gc-preview-marker');
+    expect(markers).toHaveLength(2);
+    expect(markers[0].getAttribute('aria-hidden')).toBe('true');
+    expect(markers[0].textContent).toBe('❶');
+    expect(markers[1].textContent).toBe('❷');
+    expect(dockCursor.style.transform).toContain('rotate');
+
+    c.clearPreview();
+    expect(ringHost.shadowRoot!.querySelectorAll('.gc-preview-marker')).toHaveLength(0);
+    expect(dockCursor.style.transform).toBe('');
+    c.dispose();
+  });
+
+  it('showPreview() auto-clears after 4 seconds', () => {
+    vi.useFakeTimers();
+    try {
+      const c = new CursorController({ getDockRect: () => dockRect, reducedMotion: () => true });
+      const b1 = target(box(10, 20, 80, 40));
+      c.showPreview([b1]);
+
+      const ringHost = document.getElementById('ghost-cursor-rings')!;
+      expect(ringHost.shadowRoot!.querySelectorAll('.gc-preview-marker')).toHaveLength(1);
+
+      vi.advanceTimersByTime(4000);
+      expect(ringHost.shadowRoot!.querySelectorAll('.gc-preview-marker')).toHaveLength(0);
+      c.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 

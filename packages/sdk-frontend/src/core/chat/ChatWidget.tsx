@@ -11,6 +11,7 @@ import { BRAND } from '../cursor/assets';
 import { prefersDarkScheme, resolveMode, tokensFor, tokensToCss } from '../theme/tokens';
 import { ACTION_ICONS, describeAction } from './describe';
 import type { Action } from '../types';
+import { getRegisteredTarget } from '../dom-utils';
 import { INITIAL_WIDGET_STATE } from '../bridge';
 import type { Bridge, WidgetBridgeState } from '../bridge';
 import type { SessionSummary, HistoryMessage } from '../history';
@@ -63,6 +64,8 @@ export interface ChatWidgetProps {
   onStop?: () => void;
   onShowMe?: (steps: { targetId: string; label: string }[]) => void;
   onTour?: () => Promise<void> | void;
+  onPreview?: (targets: HTMLElement[]) => void;
+  onClearPreview?: () => void;
   history?: HistoryProp;
   initialContext: any;
 }
@@ -901,6 +904,9 @@ export class ChatWidget extends Component<ChatWidgetProps, ChatWidgetState> {
                 actions={pendingActions}
                 onApprove={this.handleActionApproval}
                 theme={theme}
+                currentPage={this.state.context?.page || (typeof window !== 'undefined' ? window.location.pathname.replace(/^\//, '') : '') || 'home'}
+                onPreview={this.props.onPreview}
+                onClearPreview={this.props.onClearPreview}
               />
             )}
 
@@ -1089,38 +1095,151 @@ interface ActionApprovalPanelProps {
   actions: any[];
   onApprove: (approved: boolean, stepByStep?: boolean) => void;
   theme?: ChatWidgetProps['theme'];
+  currentPage?: string;
+  onPreview?: (targets: HTMLElement[]) => void;
+  onClearPreview?: () => void;
 }
 
 interface ActionApprovalPanelState {
   stepByStep: boolean;
+  confirmedRisk: boolean;
 }
 
 class ActionApprovalPanel extends Component<ActionApprovalPanelProps, ActionApprovalPanelState> {
   state: ActionApprovalPanelState = {
     stepByStep: false,
+    confirmedRisk: false,
+  };
+
+  private getOnPageElements(): HTMLElement[] {
+    const list: HTMLElement[] = [];
+    for (const action of this.props.actions) {
+      if (action.target_id) {
+        const reg = getRegisteredTarget(action.target_id);
+        let el: HTMLElement | null = null;
+        if (reg) {
+          try { el = reg.resolve(); } catch {}
+        }
+        if (!el) {
+          try {
+            el = document.querySelector<HTMLElement>(`[data-ghost-id="${CSS.escape(action.target_id)}"], [data-testid="${CSS.escape(action.target_id)}"], #${CSS.escape(action.target_id)}`);
+          } catch {
+            // ignore
+          }
+        }
+        if (el && (el.isConnected ?? document.body.contains(el))) {
+          list.push(el);
+        }
+      } else if (action.type === 'navigate' && action.target_page) {
+        const path = '/' + action.target_page.replace(/^\/+/, '');
+        try {
+          const link = document.querySelector<HTMLElement>(`[data-ghost-nav="${CSS.escape(action.target_page)}"], [data-ghost-nav="${CSS.escape(path)}"]`);
+          if (link && (link.isConnected ?? document.body.contains(link))) {
+            list.push(link);
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+    return list;
+  }
+
+  private handlePreview = (e: Event) => {
+    e.preventDefault();
+    const els = this.getOnPageElements();
+    this.props.onPreview?.(els);
+  };
+
+  private handleStepEnter = (_action: Action) => {
+    const els = this.getOnPageElements();
+    this.props.onPreview?.(els);
+  };
+
+  private handleStepLeave = () => {
+    this.props.onClearPreview?.();
+  };
+
+  private handleApprove = (approved: boolean) => {
+    this.props.onClearPreview?.();
+    this.props.onApprove(approved, this.state.stepByStep);
   };
 
   render() {
-    const { actions, onApprove } = this.props;
-    const { stepByStep } = this.state;
+    const { actions, currentPage } = this.props;
+    const { stepByStep, confirmedRisk } = this.state;
+    const hasConfirmRisk = actions.some((act: Action) => {
+      const reg = act.target_id ? getRegisteredTarget(act.target_id) : undefined;
+      return reg?.risk === 'confirm' || (act as any).risk === 'confirm';
+    });
+
+    const current = (currentPage || '').replace(/^\//, '') || 'home';
+
     return (
-      <div className="gc-plan" role="group" aria-label="Proposed plan">
+      <div
+        className="gc-plan"
+        role="group"
+        aria-label="Proposed plan"
+        onMouseLeave={this.handleStepLeave}
+      >
         <div className="gc-plan-head">
           <span>PLAN</span>
+          <button
+            type="button"
+            className="gc-plan-preview"
+            onClick={this.handlePreview}
+          >
+            Preview
+          </button>
           <span>{actions.length} {actions.length === 1 ? 'STEP' : 'STEPS'}</span>
         </div>
         <ol className="gc-plan-list">
-          {actions.map((action: Action, index: number) => (
-            <li key={action.id ?? index} className="gc-plan-step">
-              <span className="gc-plan-num">{index + 1}</span>
-              <span className="gc-plan-icon" aria-hidden="true">{ACTION_ICONS[action.type] ?? '•'}</span>
-              <div>
-                <div className="gc-plan-text">{describeAction(action)}</div>
-                {action.explanation && <div className="gc-plan-why">{action.explanation}</div>}
-              </div>
-            </li>
-          ))}
+          {actions.map((action: Action, index: number) => {
+            const reg = action.target_id ? getRegisteredTarget(action.target_id) : undefined;
+            const isConfirm = reg?.risk === 'confirm' || (action as any).risk === 'confirm';
+            let stepPage = action.target_page?.replace(/^\//, '');
+            if (!stepPage && reg && reg.page && reg.page !== 'global') {
+              stepPage = reg.page;
+            }
+            const isOtherPage = Boolean(stepPage && stepPage.toLowerCase() !== current.toLowerCase());
+            const otherPageLabel = stepPage && isOtherPage ? stepPage.charAt(0).toUpperCase() + stepPage.slice(1) : null;
+
+            return (
+              <li
+                key={action.id ?? index}
+                className="gc-plan-step"
+                onMouseEnter={() => this.handleStepEnter(action)}
+                onMouseLeave={this.handleStepLeave}
+                onFocus={() => this.handleStepEnter(action)}
+                onBlur={this.handleStepLeave}
+              >
+                <span className="gc-plan-num">{index + 1}</span>
+                <span className="gc-plan-icon" aria-hidden="true">{ACTION_ICONS[action.type] ?? '•'}</span>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div className="gc-plan-text">
+                    {describeAction(action)}
+                    {otherPageLabel && <span className="gc-plan-page"> on {otherPageLabel}</span>}
+                    {isConfirm && <span className="gc-plan-risk-warn" title="Sensitive step" aria-label="Sensitive step"> ⚠️</span>}
+                  </div>
+                  {action.explanation && <div className="gc-plan-why">{action.explanation}</div>}
+                </div>
+              </li>
+            );
+          })}
         </ol>
+        {hasConfirmRisk && (
+          <div className="gc-plan-confirm-row">
+            <label className="gc-plan-confirm-label">
+              <input
+                type="checkbox"
+                className="gc-plan-confirm-checkbox"
+                checked={confirmedRisk}
+                onChange={(e: any) => this.setState({ confirmedRisk: e.target.checked })}
+              />
+              <span>I understand this step can't be undone</span>
+            </label>
+          </div>
+        )}
         <div className="gc-plan-toggle-row">
           <label className="gc-plan-toggle">
             <input
@@ -1134,8 +1253,15 @@ class ActionApprovalPanel extends Component<ActionApprovalPanelProps, ActionAppr
           </label>
         </div>
         <div className="gc-plan-actions">
-          <button type="button" className="gc-btn gc-btn--ghost" onClick={() => onApprove(false, stepByStep)}>Cancel</button>
-          <button type="button" className="gc-btn gc-btn--primary" onClick={() => onApprove(true, stepByStep)}>Approve and Run</button>
+          <button type="button" className="gc-btn gc-btn--ghost" onClick={() => this.handleApprove(false)}>Cancel</button>
+          <button
+            type="button"
+            className="gc-btn gc-btn--primary"
+            disabled={hasConfirmRisk && !confirmedRisk}
+            onClick={() => this.handleApprove(true)}
+          >
+            Approve and Run
+          </button>
         </div>
       </div>
     );

@@ -27,8 +27,10 @@ export const RING_CSS = `
 .gc-ring { position: fixed; pointer-events: none; box-sizing: border-box; border: 2px solid var(--gc-accent); outline: 2px dashed var(--gc-accent); outline-offset: 4px; box-shadow: 0 0 0 6px rgba(59, 123, 223, .18); transition: border-color .2s ease, outline-color .2s ease, box-shadow .2s ease; animation: gc-ring-in .25s ease-out; }
 .gc-ring[data-tone="success"] { border-color: #22C55E; outline-color: #22C55E; box-shadow: 0 0 0 6px rgba(34, 197, 94, .22); }
 .gc-ring[data-tone="error"] { border-color: #EF4444; outline-color: #EF4444; box-shadow: 0 0 0 6px rgba(239, 68, 68, .22); animation: gc-ring-shake .3s ease-in-out 1; }
+.gc-preview-marker { position: fixed; pointer-events: none; box-sizing: border-box; border: 2px dashed var(--gc-accent); border-radius: 6px; background: rgba(59, 123, 223, .08); z-index: 1; animation: gc-ring-in .2s ease-out; }
+.gc-preview-badge { position: absolute; top: -12px; left: -12px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 50%; background: var(--gc-accent); color: #fff; font: 700 13px/1 Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; box-shadow: 0 2px 6px rgba(0, 0, 0, .25); }
 @keyframes gc-ring-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes gc-ring-shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-4px); } 50% { transform: translateX(4px); } 75% { transform: translateX(-3px); } }
-@media (prefers-reduced-motion: reduce) { .gc-ring { animation: none !important; transition: none; } }
+@media (prefers-reduced-motion: reduce) { .gc-ring, .gc-preview-marker { animation: none !important; transition: none; } }
 `;
 

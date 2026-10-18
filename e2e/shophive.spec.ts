@@ -670,6 +670,26 @@ test.describe('streaming progress SSE (A11)', () => {
   });
 });
 
+test('path preview: numbered dashed markers appear on hover/preview and disappear after approve', async ({ page }) => {
+  await page.goto('/');
+  await ask(page, 'Turn on dark mode');
+  await expect(page.getByRole('button', { name: 'Approve and Run' })).toBeVisible({ timeout: 20_000 });
+
+  const previewBtn = page.locator('.gc-plan-preview');
+  await expect(previewBtn).toBeVisible();
+
+  // Click Preview
+  await previewBtn.click();
+  const marker = page.locator('#ghost-cursor-rings .gc-preview-marker');
+  await expect(marker).toBeVisible({ timeout: 5_000 });
+  await expect(marker).toContainText('❶');
+
+  // Approve and run: markers disappear
+  await approve(page);
+  await expect(marker).toHaveCount(0, { timeout: 10_000 });
+  await expect(page.locator('[data-ghost-id="theme.toggle"]')).toBeChecked({ timeout: 20_000 });
+});
+
 
 
 

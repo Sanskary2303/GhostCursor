@@ -2,10 +2,13 @@
 Unit Tests for GeminiProvider (Step 22)
 """
 
+import base64
+import json
 import pytest
 import uuid
 from types import SimpleNamespace
 from typing import Any, Dict, List
+from google.genai import types
 
 from services.orchestrator.app.agent import create_ghost_agent
 from services.orchestrator.app.llm import DEFAULT_MODEL
@@ -317,5 +320,104 @@ async def test_gemini_provider_summarize_uses_summary_model(monkeypatch):
     assert recorded["model"] == "gemini-3.5-flash-lite"
     assert title == "Dark mode"
     assert summary == "User turned on dark mode."
+
+
+@pytest.mark.asyncio
+async def test_thought_signature_survives_the_next_call(monkeypatch):
+    provider = GeminiProvider(project="test-proj", location="us-central1")
+    agent = create_ghost_agent(
+        brain_content="Settings page",
+        available_targets=["theme.toggle"],
+        current_context={"page": "settings", "values": {}, "availableTargets": ["theme.toggle"]},
+    )
+
+    first = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                name="toggle_switch",
+                                args={
+                                    "target_id": "theme.toggle",
+                                    "state": True,
+                                    "explanation": "Turn on dark mode",
+                                },
+                            ),
+                            thought_signature=b"sig-123",
+                        )
+                    ],
+                )
+            )
+        ]
+    )
+    second = types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    role="model",
+                    parts=[types.Part(text="Dark mode is on.")],
+                )
+            )
+        ]
+    )
+
+    responses = [first, second]
+    recorded_contents = []
+
+    async def fake_generate_content(model: str, contents: Any, config: Any):
+        recorded_contents.append(contents)
+        return responses.pop(0)
+
+    monkeypatch.setattr(provider.client.aio.models, "generate_content", fake_generate_content)
+
+    transcript = [{"role": "user", "parts": [{"text": "Turn on dark mode"}]}]
+    resp1 = await provider.generate_content(
+        agent=agent,
+        user_message="Turn on dark mode",
+        run_context={"run_id": "sig-test-run", "revision": 0},
+        transcript=transcript,
+    )
+
+    assert resp1.status == "awaiting_actions"
+    assert len(resp1.actions) == 1
+    assert resp1.actions[0]["type"] == "toggle_switch"
+
+    # json.dumps(transcript) works, and thought_signature is base64 encoded string
+    json_str = json.dumps(transcript)
+    assert json_str is not None
+    assert transcript[1]["parts"][0]["thought_signature"] == base64.b64encode(b"sig-123").decode()
+
+    # Append function_response turn and call again
+    transcript.append({
+        "role": "user",
+        "parts": [
+            {
+                "function_response": {
+                    "name": "toggle_switch",
+                    "response": {"ok": True, "output": {}},
+                }
+            }
+        ],
+    })
+
+    resp2 = await provider.generate_content(
+        agent=agent,
+        user_message="",
+        run_context={"run_id": "sig-test-run", "revision": 1},
+        transcript=transcript,
+    )
+
+    assert resp2.status == "completed"
+    assert resp2.reply == "Dark mode is on."
+
+    assert len(recorded_contents) == 2
+    second_contents = recorded_contents[1]
+    assert isinstance(second_contents[1], types.Content)
+    assert second_contents[1].role == "model"
+    assert second_contents[1].parts[0].thought_signature == b"sig-123"
+
 
 

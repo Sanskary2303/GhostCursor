@@ -42,6 +42,41 @@ def prune_transcript(transcript: List[Dict[str, Any]], max_parts: int = 40) -> L
     return transcript
 
 
+def model_turn(response: Any) -> Optional[Dict[str, Any]]:
+    """The model's turn for the transcript, kept whole so thought signatures go back unchanged."""
+    candidates = getattr(response, "candidates", None) or []
+    content = getattr(candidates[0], "content", None) if candidates else None
+    if content is None:
+        return None
+    if hasattr(content, "model_dump"):
+        turn = content.model_dump(mode="json", exclude_none=True)
+        turn["role"] = "model"
+        turn["parts"] = [p for p in turn.get("parts", []) if p]
+        return turn if turn["parts"] else None
+    parts: List[Dict[str, Any]] = []
+    for part in getattr(content, "parts", None) or []:
+        fc = getattr(part, "function_call", None)
+        text = getattr(part, "text", None)
+        if fc:
+            fc_args = getattr(fc, "args", None)
+            if fc_args is None:
+                fc_args = {}
+            elif hasattr(fc_args, "model_dump"):
+                fc_args = fc_args.model_dump()
+            else:
+                fc_args = dict(fc_args)
+            name = getattr(fc, "name", None) or getattr(fc, "tool", "")
+            parts.append({"function_call": {"name": name, "args": fc_args}})
+        if text:
+            parts.append({"text": text})
+    return {"role": "model", "parts": parts} if parts else None
+
+
+def to_contents(transcript: List[Dict[str, Any]]) -> List[types.Content]:
+    # JSON validation turns base64 thought signatures back into bytes.
+    return [types.Content.model_validate_json(json.dumps(turn)) for turn in transcript]
+
+
 class GeminiProvider(BaseVertexClient):
     """
     Production Gemini 2.0 provider on Vertex AI via google-genai SDK.
@@ -115,7 +150,7 @@ class GeminiProvider(BaseVertexClient):
         try:
             response = await self.client.aio.models.generate_content(
                 model=self.model,
-                contents=transcript,
+                contents=to_contents(transcript),
                 config=config,
             )
         except Exception as e:
@@ -123,37 +158,9 @@ class GeminiProvider(BaseVertexClient):
             raise ProviderError(f"Gemini provider error: {e}") from e
 
         # 3. Append model turn to transcript (text and function calls)
-        model_parts = []
-        if hasattr(response, "candidates") and response.candidates:
-            candidate = response.candidates[0]
-            content = getattr(candidate, "content", None)
-            parts = getattr(content, "parts", None) if content else []
-            for part in (parts or []):
-                fc = getattr(part, "function_call", None)
-                text = getattr(part, "text", None)
-                if fc:
-                    fc_name = getattr(fc, "name", None) or getattr(fc, "tool", "")
-                    fc_args = getattr(fc, "args", None)
-                    if fc_args is None:
-                        fc_args = {}
-                    elif hasattr(fc_args, "model_dump"):
-                        fc_args = fc_args.model_dump()
-                    else:
-                        fc_args = dict(fc_args)
-                    model_parts.append({
-                        "function_call": {
-                            "name": fc_name,
-                            "args": fc_args,
-                        }
-                    })
-                if text:
-                    model_parts.append({"text": text})
-
-        if model_parts:
-            transcript.append({
-                "role": "model",
-                "parts": model_parts,
-            })
+        turn = model_turn(response)
+        if turn:
+            transcript.append(turn)
             prune_transcript(transcript, max_parts=40)
 
         # 4. Parse response with shared strict rules

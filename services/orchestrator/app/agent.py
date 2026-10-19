@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from .tools.frontend_actions import FRONTEND_ACTION_TOOLS
+from .llm import DEFAULT_MODEL
 
 
 @dataclass
@@ -124,7 +125,7 @@ Available Targets: {current_context.get('availableTargets', [])}
 
     return GhostAgent(
         name="ghost_cursor_orchestrator",
-        model="gemini-2.0-flash",
+        model=DEFAULT_MODEL,
         instruction=instruction,
         tools=tools,
         brain_content=brain_content or "",
@@ -138,7 +139,7 @@ def create_adk_agent(
     available_targets: list,
     current_context: dict,
     customer_backend_tools: Optional[List[Any]] = None,
-    model: Any = "gemini-2.0-flash",
+    model: Any = DEFAULT_MODEL,
 ) -> Any:
     """
     Instantiates the Google ADK Agent with dynamic brain context,

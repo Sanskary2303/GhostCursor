@@ -25,6 +25,7 @@ from ..agent import GhostAgent
 from ..models.contracts import HostedRunResponse, validate_actions
 from .vertex import BaseVertexClient, ProviderError, heuristic_summary, parse_model_response
 from .gemini import prune_transcript
+from . import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -106,20 +107,30 @@ class ADKProvider(BaseVertexClient):
         self,
         project: Optional[str] = None,
         location: str = "us-central1",
-        model: str = "gemini-2.0-flash",
+        model: str = DEFAULT_MODEL,
         session_service: Optional[InMemorySessionService] = None,
         llm_client: Optional[BaseLlm] = None,
         app_name: str = "ghost_cursor",
+        summary_model: Optional[str] = None,
     ):
         self.project = project
         self.location = location
         self.model = model
+        self.summary_model = summary_model or model
         self.session_service = session_service or InMemorySessionService()
         self.llm_client = llm_client
         self.app_name = app_name
         self._runners: Dict[str, Runner] = {}
         self._started: Dict[str, Tuple[float, str]] = {}
         self._summarizer: Optional[BaseVertexClient] = None
+
+    async def verify_model(self) -> None:
+        if self.llm_client is not None:
+            return
+        from .gemini import GeminiProvider
+        await GeminiProvider(
+            project=self.project, location=self.location, model=self.model, summary_model=self.summary_model
+        ).verify_model()
 
     def _build_agent(self, agent: GhostAgent) -> LlmAgent:
         adk_tools = build_adk_tools(agent.tools)
@@ -334,7 +345,9 @@ class ADKProvider(BaseVertexClient):
             return heuristic_summary(messages)
         if self._summarizer is None:
             from .gemini import GeminiProvider
-            self._summarizer = GeminiProvider(project=self.project, location=self.location, model=self.model)
+            self._summarizer = GeminiProvider(
+                project=self.project, location=self.location, model=self.model, summary_model=self.summary_model
+            )
         return await self._summarizer.summarize(messages)
 
     async def close(self) -> None:

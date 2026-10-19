@@ -8,6 +8,7 @@ Requires valid GCP credentials (e.g. gcloud auth application-default login).
 import os
 import pytest
 from services.orchestrator.app.agent import create_ghost_agent
+from services.orchestrator.app.llm import DEFAULT_MODEL
 from services.orchestrator.app.llm.gemini import GeminiProvider
 
 
@@ -17,10 +18,10 @@ from services.orchestrator.app.llm.gemini import GeminiProvider
 )
 @pytest.mark.asyncio
 async def test_gemini_live_real_plan_generation():
-    """Live call to Vertex AI Gemini 2.0 Flash checking real action generation"""
+    """Live call to Vertex AI Gemini Flash checking real action generation"""
     project_id = os.getenv("GCP_PROJECT_ID", "default-project")
     location = os.getenv("GCP_LOCATION", "us-central1")
-    model = os.getenv("GHOST_MODEL", "gemini-2.0-flash")
+    model = os.getenv("GHOST_MODEL", DEFAULT_MODEL)
 
     provider = GeminiProvider(project=project_id, location=location, model=model)
 

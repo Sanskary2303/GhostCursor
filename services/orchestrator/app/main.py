@@ -46,6 +46,7 @@ EXPECTED_KINDS = {
 from .tools.frontend_actions import FRONTEND_ACTION_TOOLS, FRONTEND_TOOL_NAMES, is_frontend_tool, normalize_schema
 from .storage.run_store import PostgreSQLRunStore, InMemoryRunStore, RunBusyError
 from .llm.vertex import BaseVertexClient, MockVertexAIClient, ProviderError
+from .llm import DEFAULT_MODEL
 from .llm.gemini import GeminiProvider, prune_transcript
 from .tools.loopback import GatewayLoopbackHandler, loopback_key, sign_tool_batch
 
@@ -122,19 +123,28 @@ def init_globals():
             run_store = InMemoryRunStore()
 
     if vertex_client is None:
+        summary_model = os.getenv("GHOST_SUMMARY_MODEL") or None
         if ghost_provider == "vertex":
             project_id = os.environ["GCP_PROJECT_ID"]
             location = os.getenv("GCP_LOCATION", "us-central1")
-            model = os.getenv("GHOST_MODEL", "gemini-2.0-flash")
-            vertex_client = GeminiProvider(project=project_id, location=location, model=model)
+            model = os.getenv("GHOST_MODEL", DEFAULT_MODEL)
+            vertex_client = GeminiProvider(project=project_id, location=location, model=model, summary_model=summary_model)
         elif ghost_provider == "adk":
             from .llm.adk import ADKProvider
             project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
             location = os.getenv("GCP_LOCATION") or os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
-            model = os.getenv("GHOST_MODEL", "gemini-2.0-flash")
-            vertex_client = ADKProvider(project=project_id, location=location, model=model)
+            model = os.getenv("GHOST_MODEL", DEFAULT_MODEL)
+            vertex_client = ADKProvider(project=project_id, location=location, model=model, summary_model=summary_model)
         else:
             vertex_client = MockVertexAIClient()
+
+        logger.info(
+            "Ghost Cursor provider=%s model=%s summary_model=%s location=%s",
+            ghost_provider,
+            getattr(vertex_client, "model", "-"),
+            getattr(vertex_client, "summary_model", "-"),
+            getattr(vertex_client, "location", "-"),
+        )
 
     if loopback_handler is None:
         loopback_handler = GatewayLoopbackHandler()
@@ -145,6 +155,10 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager"""
     store = getattr(app.state, "store", None) or run_store
     provider = getattr(app.state, "provider", None) or vertex_client
+
+    if provider is not None and hasattr(provider, "verify_model") and os.getenv("GHOST_SKIP_MODEL_CHECK") != "1":
+        await provider.verify_model()
+        logger.info("Model check passed")
 
     if isinstance(store, PostgreSQLRunStore):
         await store.initialize()

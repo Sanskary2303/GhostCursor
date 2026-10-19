@@ -16,6 +16,7 @@ from google.genai import types
 from ..agent import GhostAgent
 from ..models.contracts import HostedRunResponse
 from .vertex import BaseVertexClient, ProviderError, parse_model_response
+from . import DEFAULT_MODEL
 
 logger = logging.getLogger(__name__)
 
@@ -51,12 +52,26 @@ class GeminiProvider(BaseVertexClient):
         self,
         project: str,
         location: str = "us-central1",
-        model: str = "gemini-2.0-flash",
+        model: str = DEFAULT_MODEL,
+        summary_model: Optional[str] = None,
     ):
         self.project = project
         self.location = location
         self.model = model
+        self.summary_model = summary_model or model
         self.client = genai.Client(vertexai=True, project=project, location=location)
+
+    async def verify_model(self) -> None:
+        """Fail fast at startup when a configured model can't be used with this project and location."""
+        for name in dict.fromkeys([self.model, self.summary_model]):
+            try:
+                await self.client.aio.models.get(model=name)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Model {name!r} is not available for project {self.project!r} in {self.location!r} "
+                    f"({type(e).__name__}: {e}). Check GHOST_MODEL, GHOST_SUMMARY_MODEL and GCP_LOCATION, "
+                    "or set GHOST_SKIP_MODEL_CHECK=1 to skip this check."
+                ) from e
 
     def _parse_response(self, response: Any, run_context: Dict[str, Any]) -> HostedRunResponse:
         """Parse response using the shared strict parsing rules."""
@@ -160,7 +175,7 @@ class GeminiProvider(BaseVertexClient):
                 response_mime_type="application/json",
             )
             response = await self.client.aio.models.generate_content(
-                model=self.model,
+                model=self.summary_model,
                 contents=prompt,
                 config=config,
             )

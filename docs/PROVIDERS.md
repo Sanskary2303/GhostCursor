@@ -25,7 +25,7 @@ ADK normally executes tools automatically in a loop. To preserve Ghost Cursor's 
 export GHOST_PROVIDER=adk
 export GCP_PROJECT_ID=your-gcp-project-id
 export GCP_LOCATION=us-central1
-export GHOST_MODEL=gemini-2.0-flash
+export GHOST_MODEL=gemini-3.5-flash
 ```
 
 When `GHOST_PROVIDER=adk` is configured, Ghost Cursor automatically validates and maps:
@@ -61,6 +61,8 @@ export GCP_PROJECT_ID=your-gcp-project-id
 export GCP_LOCATION=us-central1
 ```
 
+If startup says the model isn't available, set `GCP_LOCATION` to a region that offers it, or to `global`.
+
 ### Provider Configuration
 
 | Setting | Environment Variable | Default |
@@ -68,14 +70,18 @@ export GCP_LOCATION=us-central1
 | Provider | `GHOST_PROVIDER` | `mock` / `vertex` / `adk` |
 | Project ID | `GCP_PROJECT_ID` or `GOOGLE_CLOUD_PROJECT` | Required for `vertex`/`adk` |
 | Location | `GCP_LOCATION` or `GOOGLE_CLOUD_LOCATION` | `us-central1` |
-| Model | `GHOST_MODEL` | `gemini-2.0-flash` |
+| Model | `GHOST_MODEL` | `gemini-3.5-flash` |
 
 ### Available Models
 
 | Model | Context Window | Use Case |
 |-------|---------------|----------|
-| `gemini-2.0-flash` | 1M tokens | Default, fast, cost-effective |
-| `gemini-2.0-pro` | 1M tokens | Complex reasoning, multi-step tasks |
+| `gemini-3.5-flash` | 1M tokens | Default, fast, cost-effective |
+| `gemini-3.8-flash` | 1M tokens | Advanced reasoning, higher throughput |
+| `gemini-3.5-flash-lite` | 1M tokens | Titles and summaries |
+| `gemini-4-argon` | 1M tokens | Complex reasoning, multi-step tasks |
+
+Check Google's model lifecycle page before changing the model. A retired model fails the startup check.
 
 ---
 
@@ -152,6 +158,9 @@ The mock provider returns deterministic responses based on message patterns:
 |----------|----------|-------------|
 | `GCP_PROJECT_ID` | Yes (if not mock) | GCP project ID for Vertex AI |
 | `GCP_LOCATION` | No | GCP region (default: us-central1) |
+| `GHOST_MODEL` | No | Planning model (default: gemini-3.5-flash) |
+| `GHOST_SUMMARY_MODEL` | No | Summarization model (defaults to GHOST_MODEL) |
+| `GHOST_SKIP_MODEL_CHECK` | No | Set to 1 to skip startup model verification |
 | `USE_MOCK_LLM` | No | Set to "true" for mock provider |
 | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | `TENANT_API_KEY_1` | Yes | API key for tenant authentication |

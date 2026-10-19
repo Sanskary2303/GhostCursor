@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from typing import Any, Dict, List
 
 from services.orchestrator.app.agent import create_ghost_agent
+from services.orchestrator.app.llm import DEFAULT_MODEL
 from services.orchestrator.app.llm.gemini import GeminiProvider, prune_transcript
 from services.orchestrator.app.llm.vertex import ProviderError
 
@@ -15,7 +16,7 @@ from services.orchestrator.app.llm.vertex import ProviderError
 @pytest.mark.asyncio
 async def test_gemini_provider_generate_content_success(monkeypatch):
     """Monkeypatch generate_content and assert parsed actions and transcript tracking"""
-    provider = GeminiProvider(project="test-proj", location="us-central1", model="gemini-2.0-flash")
+    provider = GeminiProvider(project="test-proj", location="us-central1", model=DEFAULT_MODEL)
     agent = create_ghost_agent(
         brain_content="ShopHive demo",
         available_targets=["btn_checkout"],
@@ -27,7 +28,7 @@ async def test_gemini_provider_generate_content_success(monkeypatch):
     ]
 
     async def fake_generate_content(model: str, contents: Any, config: Any):
-        assert model == "gemini-2.0-flash"
+        assert model == DEFAULT_MODEL
         assert len(contents) == 1
         assert config.temperature == 0.2
         assert config.automatic_function_calling.disable is True
@@ -84,7 +85,7 @@ async def test_gemini_provider_generate_content_success(monkeypatch):
 @pytest.mark.asyncio
 async def test_gemini_provider_sdk_error_raises_provider_error(monkeypatch):
     """Any SDK error in generate_content raises ProviderError without fallback"""
-    provider = GeminiProvider(project="test-proj", location="us-central1", model="gemini-2.0-flash")
+    provider = GeminiProvider(project="test-proj", location="us-central1", model=DEFAULT_MODEL)
     agent = create_ghost_agent(brain_content="", available_targets=[], current_context={})
 
     async def fake_failing_generate_content(*args, **kwargs):
@@ -252,4 +253,69 @@ async def test_ask_clarification_answer_transcript_format(app, auth_headers, mon
                 }
             }
         ]
+
+
+def test_gemini_provider_defaults():
+    provider = GeminiProvider(project="p")
+    assert provider.model == "gemini-3.5-flash"
+    assert provider.summary_model == "gemini-3.5-flash"
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_verify_model_success(monkeypatch):
+    provider = GeminiProvider(
+        project="p",
+        location="global",
+        model="gemini-3.5-flash",
+        summary_model="gemini-3.5-flash-lite",
+    )
+    recorded_models = []
+
+    async def fake_get(model: str):
+        recorded_models.append(model)
+        return SimpleNamespace(name=model)
+
+    monkeypatch.setattr(provider.client.aio.models, "get", fake_get)
+    await provider.verify_model()
+    assert recorded_models == ["gemini-3.5-flash", "gemini-3.5-flash-lite"]
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_verify_model_failure(monkeypatch):
+    provider = GeminiProvider(
+        project="p",
+        location="global",
+        model="gemini-3.5-flash",
+    )
+
+    async def fake_failing_get(model: str):
+        raise RuntimeError("404 NOT_FOUND")
+
+    monkeypatch.setattr(provider.client.aio.models, "get", fake_failing_get)
+    with pytest.raises(RuntimeError) as exc_info:
+        await provider.verify_model()
+    err_msg = str(exc_info.value)
+    assert "gemini-3.5-flash" in err_msg
+    assert "global" in err_msg
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_summarize_uses_summary_model(monkeypatch):
+    provider = GeminiProvider(
+        project="p",
+        model="gemini-3.5-flash",
+        summary_model="gemini-3.5-flash-lite",
+    )
+    recorded = {}
+
+    async def fake_generate_content(model: str, contents: Any, config: Any):
+        recorded["model"] = model
+        return SimpleNamespace(text='{"title": "Dark mode", "summary": "User turned on dark mode."}')
+
+    monkeypatch.setattr(provider.client.aio.models, "generate_content", fake_generate_content)
+    title, summary = await provider.summarize([{"role": "user", "text": "Turn on dark mode"}])
+    assert recorded["model"] == "gemini-3.5-flash-lite"
+    assert title == "Dark mode"
+    assert summary == "User turned on dark mode."
+
 

@@ -1694,6 +1694,34 @@ async def test_mock_fixtures_for_chips(auth_headers):
         assert any(a.get("type") == "guided_tour" for a in d5.get("actions", []))
 
 
+@pytest.mark.asyncio
+async def test_startup_model_check(monkeypatch):
+    from services.orchestrator.app.main import create_app
+    from services.orchestrator.app.storage.run_store import InMemoryRunStore
+    from services.orchestrator.app.llm.vertex import MockVertexAIClient
+
+    class FailingModelClient(MockVertexAIClient):
+        async def verify_model(self):
+            raise RuntimeError("Model 'gemini-nope' is not available")
+
+    store = InMemoryRunStore()
+    provider = FailingModelClient()
+    tenant_keys = {"a" * 32: "test"}
+    app_instance = create_app(store=store, provider=provider, tenant_keys=tenant_keys)
+
+    # 1. Without GHOST_SKIP_MODEL_CHECK: raises RuntimeError matching gemini-nope
+    monkeypatch.delenv("GHOST_SKIP_MODEL_CHECK", raising=False)
+    with pytest.raises(RuntimeError, match="gemini-nope"):
+        async with app_instance.router.lifespan_context(app_instance):
+            pass
+
+    # 2. With GHOST_SKIP_MODEL_CHECK=1: does not raise
+    monkeypatch.setenv("GHOST_SKIP_MODEL_CHECK", "1")
+    async with app_instance.router.lifespan_context(app_instance):
+        pass
+
+
+
 
 
 
